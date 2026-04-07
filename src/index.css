@@ -20,6 +20,16 @@
 }
 
 @layer base {
+  html {
+    background:
+      radial-gradient(circle at top, rgba(109, 40, 217, 0.14), transparent 24%),
+      radial-gradient(circle at 15% 20%, rgba(126, 34, 206, 0.12), transparent 22%),
+      linear-gradient(180deg, #0f0618 0%, #05020d 48%, #020109 100%);
+    background-color: #020109;
+    min-height: 100%;
+    overscroll-behavior-y: none;
+  }
+
   body {
     font-family: "DM Sans", serif;
     font-optical-sizing: auto;
@@ -27,7 +37,13 @@
       radial-gradient(circle at top, rgba(109, 40, 217, 0.14), transparent 24%),
       radial-gradient(circle at 15% 20%, rgba(126, 34, 206, 0.12), transparent 22%),
       linear-gradient(180deg, #0f0618 0%, #05020d 48%, #020109 100%);
+    background-color: #020109;
     color: #f5f3ff;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   h1 {
@@ -40,6 +56,8 @@
 
   main {
     @apply min-h-screen relative overflow-hidden bg-primary;
+    min-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   }
 
   header {
@@ -122,6 +140,8 @@
 
   .wrapper {
     @apply px-5 py-12 xs:p-10 max-w-7xl mx-auto flex flex-col relative z-10;
+    padding-top: calc(3rem + env(safe-area-inset-top));
+    padding-bottom: calc(3rem + env(safe-area-inset-bottom));
   }
 
   .trending {
