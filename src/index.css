@@ -269,18 +269,18 @@
   }
 
   .movie-card {
-    @apply bg-dark-100 p-5 rounded-2xl shadow-inner shadow-light-100/10;
+    @apply bg-dark-100 p-4 rounded-2xl shadow-inner shadow-light-100/10 sm:p-5;
 
     & img {
-      @apply rounded-lg h-auto w-full;
+      @apply aspect-[2/3] rounded-lg w-full object-cover;
     }
 
     & h3 {
-      @apply text-white font-bold text-base line-clamp-1;
+      @apply text-white font-bold text-sm line-clamp-1 sm:text-base;
     }
 
     & .content {
-      @apply mt-2 flex flex-row items-baseline flex-wrap gap-2;
+      @apply mt-2 flex flex-row items-baseline flex-wrap gap-1.5 text-xs sm:gap-2 sm:text-sm;
     }
 
     & .rating {
@@ -292,19 +292,23 @@
     }
 
     & .rating p {
-      @apply font-bold text-base text-white;
+      @apply font-bold text-sm text-white sm:text-base;
     }
 
     & .content span {
-      @apply text-sm text-gray-100;
+      @apply text-xs text-gray-100 sm:text-sm;
     }
 
     & .content .lang {
-      @apply capitalize text-gray-100 font-medium text-base;
+      @apply capitalize text-gray-100 font-medium text-sm sm:text-base;
     }
 
     & .content .year {
-      @apply text-gray-100 font-medium text-base;
+      @apply text-gray-100 font-medium text-sm sm:text-base;
+    }
+
+    & .content .runtime {
+      @apply text-gray-100 font-medium text-sm sm:text-base;
     }
   }
 
