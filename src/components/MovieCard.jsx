@@ -10,7 +10,7 @@ const MovieCard = ({ movie, onWatchTrailer }) => {
        `https://image.tmdb.org/t/p/w500${poster_path}` : '/no-movie.png'} 
        alt={title}
        />
-       <div className="mt-3 sm:mt-4">    
+       <div className="mt-2.5 sm:mt-3 lg:mt-4">    
         <h3>{title}</h3>
         <div className="content">
             <div className="rating">
@@ -27,7 +27,7 @@ const MovieCard = ({ movie, onWatchTrailer }) => {
          </div>
         <button
           onClick={() => onWatchTrailer(movie)}
-          className="mt-3 inline-flex min-h-10 items-center justify-center rounded-xl border border-white/10 bg-linear-to-r from-[#1c1330] to-[#0f0b1f] px-3.5 py-2 text-sm font-semibold text-white shadow-lg shadow-black/25 transition hover:border-[#8f6bff]/40 hover:from-[#271947] hover:to-[#151028] sm:mt-4 sm:min-h-11 sm:px-4"
+          className="mt-2.5 inline-flex min-h-9 items-center justify-center rounded-xl border border-white/10 bg-linear-to-r from-[#1c1330] to-[#0f0b1f] px-3 py-1.5 text-[12px] font-semibold text-white shadow-lg shadow-black/25 transition hover:border-[#8f6bff]/40 hover:from-[#271947] hover:to-[#151028] sm:mt-3 sm:min-h-10 sm:px-3.5 sm:py-2 sm:text-sm lg:mt-4 lg:min-h-11 lg:px-4"
         >
           Watch Trailer
         </button>
