@@ -60,11 +60,32 @@ const MovieModal = ({
 
           <div className="movie-modal-layout">
             <div className="movie-modal-poster-column">
-              <img
-                src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '/no-movie.png'}
-                alt={movie.title}
-                className="movie-modal-poster"
-              />
+              <div className="movie-modal-hero-strip">
+                <img
+                  src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '/no-movie.png'}
+                  alt={movie.title}
+                  className="movie-modal-poster"
+                />
+
+                <div className="movie-modal-mobile-meta-grid">
+                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
+                    <strong>Release</strong>
+                    <span>{movie.release_date ? new Date(movie.release_date).toLocaleDateString() : 'N/A'}</span>
+                  </p>
+                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
+                    <strong>Rating</strong>
+                    <span>{movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A'} / 10</span>
+                  </p>
+                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
+                    <strong>Language</strong>
+                    <span>{movie.original_language ? movie.original_language.toUpperCase() : 'N/A'}</span>
+                  </p>
+                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
+                    <strong>Runtime</strong>
+                    <span>{movie.runtime ? `${movie.runtime} min` : 'N/A'}</span>
+                  </p>
+                </div>
+              </div>
 
               <div className="movie-modal-switches">
                 <button

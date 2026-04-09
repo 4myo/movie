@@ -609,8 +609,12 @@
     @apply flex flex-col gap-4;
   }
 
+  .movie-modal-hero-strip {
+    @apply grid grid-cols-[112px_minmax(0,1fr)] items-start gap-3 sm:grid-cols-[132px_minmax(0,1fr)] lg:block;
+  }
+
   .movie-modal-poster {
-    @apply w-full max-w-[260px] rounded-2xl border border-white/10 object-cover shadow-lg shadow-black/35;
+    @apply w-full max-w-[112px] rounded-2xl border border-white/10 object-cover shadow-lg shadow-black/35 sm:max-w-[132px] lg:max-w-[260px];
   }
 
   .movie-modal-switches {
@@ -629,24 +633,89 @@
     @apply flex min-w-0 flex-col gap-5;
   }
 
+  .movie-modal-mobile-meta-grid {
+    @apply grid grid-cols-1 gap-2 sm:grid-cols-2 lg:hidden;
+  }
+
   .movie-modal-metadata-grid {
-    @apply grid gap-3 sm:grid-cols-2;
+    @apply hidden gap-3 sm:grid-cols-2 lg:grid;
   }
 
   .movie-modal-meta-item {
     @apply flex flex-col rounded-2xl border border-white/8 bg-white/5 p-4;
   }
 
+  .movie-modal-meta-item-compact {
+    @apply rounded-xl p-3;
+  }
+
   .movie-modal-meta-item strong {
     @apply text-sm font-semibold uppercase tracking-[0.18em] text-light-200;
+  }
+
+  .movie-modal-meta-item-compact strong {
+    @apply text-[10px] tracking-[0.2em];
   }
 
   .movie-modal-meta-item span {
     @apply mt-2 text-base font-medium text-white;
   }
 
+  .movie-modal-meta-item-compact span {
+    @apply mt-1 text-sm;
+  }
+
   .movie-modal-overview {
     @apply max-w-3xl text-base leading-8 text-light-200;
+  }
+
+  .movie-modal-switches .movie-modal-tab {
+    @apply flex-1;
+  }
+
+  @media (max-width: 479px) {
+    .movie-modal-inner {
+      padding: 1rem;
+    }
+
+    .movie-modal-header {
+      margin-bottom: 1rem;
+      gap: 0.75rem;
+    }
+
+    .movie-modal-title {
+      font-size: 1.5rem;
+      line-height: 1.1;
+    }
+
+    .movie-modal-close {
+      min-height: 2.5rem;
+      padding: 0.5rem 0.85rem;
+      font-size: 0.875rem;
+    }
+
+    .movie-modal-layout {
+      gap: 1rem;
+    }
+
+    .movie-modal-switches {
+      gap: 0.75rem;
+    }
+
+    .movie-modal-tab {
+      min-height: 2.75rem;
+      padding: 0.65rem 0.9rem;
+      font-size: 0.875rem;
+    }
+
+    .movie-modal-player-heading {
+      font-size: 1rem;
+    }
+
+    .movie-modal-overview {
+      font-size: 0.9375rem;
+      line-height: 1.7;
+    }
   }
 
   .movie-modal-player-block {
@@ -687,6 +756,26 @@
 
   .movie-modal-similar-loading {
     @apply flex gap-3 overflow-hidden;
+  }
+
+  .site-footer {
+    @apply mt-10 border-t border-white/8 pt-5 pb-2;
+  }
+
+  .site-footer-inner {
+    @apply rounded-[1.5rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-left shadow-lg shadow-black/10 backdrop-blur-sm sm:px-5;
+  }
+
+  .site-footer-brand {
+    @apply text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300;
+  }
+
+  .site-footer-copy {
+    @apply mt-3 text-xs leading-6 text-slate-300;
+  }
+
+  .site-footer-copy-muted {
+    @apply mt-2 text-[11px] leading-5 text-slate-400;
   }
 }
 

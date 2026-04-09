@@ -865,6 +865,18 @@ const App = () => {
 
           {!errorMessage && movieList.length > 0 && <PaginationControls position="bottom" />}
         </section>
+
+        <footer className="site-footer" aria-label="Site disclaimer and attribution">
+          <div className="site-footer-inner">
+            <p className="site-footer-brand">Movie Browser Demo</p>
+            <p className="site-footer-copy">
+              This website is provided for demonstration and non-production use only. Content, metadata, and imagery are powered by the TMDB API.
+            </p>
+            <p className="site-footer-copy site-footer-copy-muted">
+              TMDB data is used for browsing and discovery. This project is an independent demo experience and is not endorsed by or certified by TMDB.
+            </p>
+          </div>
+        </footer>
       </div>
 
       {showModal && (
