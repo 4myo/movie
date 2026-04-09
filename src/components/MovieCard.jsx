@@ -1,16 +1,25 @@
 import React from 'react'
 
-const MovieCard = ({ movie, onWatchTrailer, compact = false }) => {
-  const { title, vote_average, poster_path, release_date, original_language, runtime } = movie;
-  const formattedRuntime = runtime ? `${runtime} min` : 'N/A';
+const MovieCard = ({ movie, onWatchTrailer, onToggleFavorite, isFavorite = false, compact = false }) => {
+  const { title, vote_average, poster_path, release_date, original_language, runtime } = movie
+  const formattedRuntime = runtime ? `${runtime} min` : 'N/A'
 
   return (
-      <div className={`movie-card ${compact ? 'movie-card-compact' : ''}`}>
+      <article className={`movie-card ${compact ? 'movie-card-compact' : ''}`}>
+       <button
+         type="button"
+         className={`movie-card-favorite ${isFavorite ? 'is-active' : ''}`}
+         onClick={() => onToggleFavorite?.(movie)}
+         aria-label={isFavorite ? `Remove ${title} from favorites` : `Save ${title} to favorites`}
+       >
+         {isFavorite ? '♥' : '♡'}
+       </button>
+
        <img src={poster_path ?
-        `https://image.tmdb.org/t/p/w500${poster_path}` : '/no-movie.png'} 
+        `https://image.tmdb.org/t/p/w500${poster_path}` : '/no-movie.png'}
         alt={title}
         />
-       <div className={compact ? 'movie-card-body movie-card-body-compact' : 'mt-2.5 sm:mt-3 lg:mt-4'}>    
+       <div className={compact ? 'movie-card-body movie-card-body-compact' : 'movie-card-body'}>
         <h3>{title}</h3>
         <div className="content">
             <div className="rating">
@@ -32,7 +41,7 @@ const MovieCard = ({ movie, onWatchTrailer, compact = false }) => {
           Watch Trailer
         </button>
        </div>
-      </div>
+      </article>
     )
 }
 

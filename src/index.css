@@ -161,6 +161,15 @@
     border-color: rgba(125, 211, 252, 0.16);
   }
 
+  .favorites-showcase {
+    @apply mt-6;
+    background:
+      radial-gradient(circle at top left, rgba(248, 113, 113, 0.18), transparent 28%),
+      radial-gradient(circle at right center, rgba(236, 72, 153, 0.12), transparent 34%),
+      linear-gradient(180deg, rgba(31, 11, 30, 0.84) 0%, rgba(22, 8, 24, 0.94) 100%);
+    border-color: rgba(251, 113, 133, 0.16);
+  }
+
   .trending-showcase-header {
     @apply flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between;
   }
@@ -231,6 +240,10 @@
 
   .trending-showcase-loading {
     @apply mt-6 flex min-h-[12rem] items-center justify-center rounded-[1.5rem] border border-white/8 bg-black/15;
+  }
+
+  .skeleton-showcase-row {
+    @apply items-stretch;
   }
 
   .trending-showcase-empty {
@@ -311,6 +324,10 @@
 
   .movie-grid {
     @apply transition-opacity duration-200;
+  }
+
+  .movie-grid-skeleton {
+    @apply grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-4 lg:gap-5;
   }
 
   .movie-grid.is-loading {
@@ -406,10 +423,24 @@
   }
 
   .movie-card {
-    @apply bg-dark-100 p-3 rounded-2xl shadow-inner shadow-light-100/10 sm:p-4 lg:p-5;
+    @apply relative bg-dark-100 p-3 rounded-2xl shadow-inner shadow-light-100/10 transition duration-200 sm:p-4 lg:p-5;
+
+    &:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
+    }
+
+    &:focus-within {
+      transform: translateY(-4px);
+      box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.28), 0 18px 34px rgba(0, 0, 0, 0.26);
+    }
 
     & img {
-      @apply aspect-[2/3] rounded-lg w-full object-cover;
+      @apply aspect-[2/3] rounded-lg w-full object-cover transition duration-200;
+    }
+
+    &:hover img {
+      transform: scale(1.02);
     }
 
     & h3 {
@@ -487,6 +518,55 @@
 
   .movie-card-button-compact {
     @apply mt-2 min-h-8 w-full px-2.5 py-1.5 text-[11px] sm:min-h-9 sm:px-3 sm:text-[12px];
+  }
+
+  .movie-card-favorite {
+    @apply absolute right-2.5 top-2.5 z-10 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/45 text-base text-white/80 backdrop-blur-sm transition hover:border-white/25 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-pink-400/60;
+  }
+
+  .movie-card-favorite.is-active {
+    @apply border-transparent bg-linear-to-r from-pink-500 to-rose-500 text-white;
+  }
+
+  .movie-card-skeleton {
+    @apply rounded-2xl border border-white/6 bg-white/5 p-3 sm:p-4 lg:p-5;
+  }
+
+  .movie-card-skeleton-compact {
+    @apply w-[150px] min-w-[150px] rounded-[1.25rem] p-2.5 sm:w-[165px] sm:min-w-[165px] sm:p-3;
+  }
+
+  .movie-card-skeleton-poster,
+  .movie-card-skeleton-line {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.06) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  }
+
+  .movie-card-skeleton-poster {
+    @apply aspect-[2/3] w-full rounded-xl;
+  }
+
+  .movie-card-skeleton-compact .movie-card-skeleton-poster {
+    @apply h-[210px] sm:h-[232px];
+  }
+
+  .movie-card-skeleton-line {
+    @apply mt-3 rounded-full;
+    height: 0.85rem;
+  }
+
+  .movie-card-skeleton-line-title {
+    width: 84%;
+  }
+
+  .movie-card-skeleton-line-meta {
+    width: 62%;
+  }
+
+  .movie-card-skeleton-line-button {
+    width: 100%;
+    height: 2.4rem;
   }
 
   .movie-modal-backdrop {
@@ -587,6 +667,36 @@
 
   .movie-modal-empty-state {
     @apply rounded-2xl border border-white/8 bg-white/5 px-4 py-6 text-sm text-light-200;
+  }
+
+  .movie-modal-similar-block {
+    @apply flex flex-col gap-4;
+  }
+
+  .movie-modal-similar-header {
+    @apply flex flex-col gap-2;
+  }
+
+  .movie-modal-similar-copy {
+    @apply text-sm text-light-200;
+  }
+
+  .movie-modal-similar-row {
+    @apply flex gap-3 overflow-x-auto pb-2;
+  }
+
+  .movie-modal-similar-loading {
+    @apply flex gap-3 overflow-hidden;
+  }
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
   }
 }
 
