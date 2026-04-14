@@ -691,43 +691,47 @@
   }
 
   .movie-modal-inner {
-    @apply relative z-10 p-5 sm:p-7;
+    @apply relative z-10 p-4 sm:p-7;
   }
 
   .movie-modal-header {
-    @apply mb-5 flex items-start justify-between gap-4;
+    @apply mb-4 flex items-start justify-between gap-3 sm:mb-5 sm:gap-4;
   }
 
   .movie-modal-title {
-    @apply text-2xl font-bold text-white sm:text-3xl;
+    @apply text-xl font-bold leading-tight text-white sm:text-3xl;
   }
 
   .movie-modal-close {
-    @apply inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 bg-white/5 px-4 py-2 text-base font-medium text-light-200 transition hover:bg-white/10 hover:text-white;
+    @apply inline-flex min-h-10 items-center justify-center rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-sm font-medium text-light-200 transition hover:bg-white/10 hover:text-white sm:min-h-11 sm:px-4 sm:text-base;
   }
 
   .movie-modal-layout {
-    @apply grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)];
+    @apply grid gap-4 sm:gap-6 lg:grid-cols-[220px_minmax(0,1fr)];
   }
 
   .movie-modal-poster-column {
-    @apply flex flex-col gap-4;
+    @apply flex flex-col gap-3;
   }
 
   .movie-modal-hero-strip {
-    @apply grid grid-cols-[112px_minmax(0,1fr)] items-start gap-3 sm:grid-cols-[132px_minmax(0,1fr)] lg:block;
+    @apply grid grid-cols-[92px_minmax(0,1fr)] items-start gap-3 sm:grid-cols-[132px_minmax(0,1fr)] lg:block;
+  }
+
+  .movie-modal-poster-shell {
+    @apply relative overflow-hidden rounded-[1.25rem] border border-white/10 bg-white/5 shadow-lg shadow-black/30;
   }
 
   .movie-modal-poster {
-    @apply w-full max-w-[112px] rounded-2xl border border-white/10 object-cover shadow-lg shadow-black/35 sm:max-w-[132px] lg:max-w-[260px];
+    @apply block w-full max-w-[92px] object-cover sm:max-w-[132px] lg:max-w-[220px];
   }
 
   .movie-modal-switches {
-    @apply flex flex-wrap gap-3;
+    @apply flex flex-wrap gap-2.5;
   }
 
   .movie-modal-tab {
-    @apply inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-light-200 transition hover:bg-white/10 hover:text-white;
+    @apply inline-flex min-h-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-light-200 transition hover:bg-white/10 hover:text-white;
   }
 
   .movie-modal-tab.is-active {
@@ -735,11 +739,11 @@
   }
 
   .movie-modal-info-column {
-    @apply flex min-w-0 flex-col gap-5;
+    @apply flex min-w-0 flex-col gap-4 sm:gap-5;
   }
 
   .movie-modal-mobile-meta-grid {
-    @apply grid grid-cols-1 gap-2 sm:grid-cols-2 lg:hidden;
+    @apply grid grid-cols-2 gap-2 lg:hidden;
   }
 
   .movie-modal-metadata-grid {
@@ -751,7 +755,7 @@
   }
 
   .movie-modal-meta-item-compact {
-    @apply rounded-xl p-3;
+    @apply min-w-0 rounded-xl p-2.5;
   }
 
   .movie-modal-meta-item strong {
@@ -759,7 +763,7 @@
   }
 
   .movie-modal-meta-item-compact strong {
-    @apply text-[10px] tracking-[0.2em];
+    @apply text-[9px] tracking-[0.16em];
   }
 
   .movie-modal-meta-item span {
@@ -767,11 +771,11 @@
   }
 
   .movie-modal-meta-item-compact span {
-    @apply mt-1 text-sm;
+    @apply mt-1 text-[13px] leading-5;
   }
 
   .movie-modal-overview {
-    @apply max-w-3xl text-base leading-8 text-light-200;
+    @apply max-w-3xl rounded-[1.35rem] border border-white/8 bg-white/[0.035] px-4 py-4 text-sm leading-7 text-light-200 sm:text-base sm:leading-8;
   }
 
   .movie-modal-switches .movie-modal-tab {
@@ -779,47 +783,101 @@
   }
 
   @media (max-width: 479px) {
+    .movie-modal-backdrop {
+      padding: 0.75rem;
+      align-items: flex-start;
+    }
+
+    .movie-modal-panel {
+      max-height: calc(100dvh - 1.5rem);
+      border-radius: 24px;
+    }
+
     .movie-modal-inner {
-      padding: 1rem;
+      padding: 0.9rem;
     }
 
     .movie-modal-header {
-      margin-bottom: 1rem;
-      gap: 0.75rem;
+      margin-bottom: 0.85rem;
+      gap: 0.65rem;
     }
 
     .movie-modal-title {
-      font-size: 1.5rem;
+      font-size: 1.25rem;
       line-height: 1.1;
     }
 
     .movie-modal-close {
-      min-height: 2.5rem;
-      padding: 0.5rem 0.85rem;
-      font-size: 0.875rem;
+      min-height: 2.35rem;
+      padding: 0.45rem 0.8rem;
+      font-size: 0.8125rem;
     }
 
     .movie-modal-layout {
-      gap: 1rem;
+      gap: 0.9rem;
     }
 
     .movie-modal-switches {
-      gap: 0.75rem;
+      gap: 0.6rem;
     }
 
     .movie-modal-tab {
-      min-height: 2.75rem;
-      padding: 0.65rem 0.9rem;
-      font-size: 0.875rem;
+      min-height: 2.6rem;
+      padding: 0.6rem 0.85rem;
+      font-size: 0.8125rem;
     }
 
     .movie-modal-player-heading {
-      font-size: 1rem;
+      font-size: 0.95rem;
     }
 
     .movie-modal-overview {
-      font-size: 0.9375rem;
-      line-height: 1.7;
+      font-size: 0.9rem;
+      line-height: 1.65;
+      padding: 0.9rem;
+    }
+
+    .movie-modal-hero-strip {
+      grid-template-columns: 84px minmax(0, 1fr);
+      gap: 0.75rem;
+    }
+
+    .movie-modal-poster {
+      max-width: 84px;
+    }
+
+    .movie-modal-mobile-meta-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+    }
+
+    .movie-modal-meta-item-compact {
+      padding: 0.65rem;
+      border-radius: 0.95rem;
+    }
+
+    .movie-modal-meta-item-compact span {
+      font-size: 0.75rem;
+      line-height: 1.25rem;
+      word-break: break-word;
+    }
+
+    .movie-modal-player-block {
+      gap: 0.75rem;
+    }
+
+    .movie-modal-player-frame {
+      border-radius: 1rem;
+    }
+
+    .episode-selector-panel {
+      gap: 0.65rem;
+      padding: 0.75rem;
+    }
+
+    .episode-selector-input {
+      min-height: 2.6rem;
+      padding: 0.65rem 0.85rem;
     }
   }
 

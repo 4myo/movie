@@ -71,13 +71,19 @@ const MovieModal = ({
           <div className="movie-modal-layout">
             <div className="movie-modal-poster-column">
               <div className="movie-modal-hero-strip">
+                <div className="movie-modal-poster-shell">
                 <img
                   src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '/no-movie.png'}
                   alt={movie.title}
                   className="movie-modal-poster"
                 />
+                </div>
 
                 <div className="movie-modal-mobile-meta-grid">
+                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
+                    <strong>Type</strong>
+                    <span>{mediaLabel}</span>
+                  </p>
                   <p className="movie-modal-meta-item movie-modal-meta-item-compact">
                     <strong>Release</strong>
                     <span>{movie.release_date ? new Date(movie.release_date).toLocaleDateString() : 'N/A'}</span>
@@ -97,20 +103,6 @@ const MovieModal = ({
                 </div>
               </div>
 
-              <div className="movie-modal-switches">
-                <button
-                  onClick={() => setViewMode('trailer')}
-                  className={`movie-modal-tab ${viewMode === 'trailer' ? 'is-active' : ''}`}
-                >
-                  Trailer
-                </button>
-                <button
-                  onClick={() => setViewMode('stream')}
-                  className={`movie-modal-tab ${viewMode === 'stream' ? 'is-active' : ''}`}
-                >
-                  Stream {mediaLabel}
-                </button>
-              </div>
             </div>
 
             <div className="movie-modal-info-column">
@@ -137,9 +129,20 @@ const MovieModal = ({
                 </p>
               </div>
 
-              {movie.overview && (
-                <p className="movie-modal-overview">{movie.overview}</p>
-              )}
+              <div className="movie-modal-switches">
+                <button
+                  onClick={() => setViewMode('trailer')}
+                  className={`movie-modal-tab ${viewMode === 'trailer' ? 'is-active' : ''}`}
+                >
+                  Trailer
+                </button>
+                <button
+                  onClick={() => setViewMode('stream')}
+                  className={`movie-modal-tab ${viewMode === 'stream' ? 'is-active' : ''}`}
+                >
+                  Stream {mediaLabel}
+                </button>
+              </div>
 
               <div className="movie-modal-player-block">
                 <h3 className="movie-modal-player-heading">
@@ -216,6 +219,10 @@ const MovieModal = ({
                   </p>
                 )}
               </div>
+
+              {movie.overview && (
+                <p className="movie-modal-overview">{movie.overview}</p>
+              )}
 
               <div className="movie-modal-similar-block">
                 <div className="movie-modal-similar-header">
