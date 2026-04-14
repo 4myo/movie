@@ -1,11 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import MovieCard from './MovieCard.jsx'
-import { getMediaLabel, getMediaPluralLabel } from '../utils/media.js'
+import { getMediaLabel, getMediaPluralLabel, getStreamingProviders } from '../utils/media.js'
 
 const MovieModal = ({
   movie,
   trailerUrl,
-  streamingUrl,
   seasonOptions = [],
   selectedSeasonNumber = null,
   selectedEpisodeNumber = null,
@@ -20,9 +19,12 @@ const MovieModal = ({
   favoriteMovieIds = []
 }) => {
   const [viewMode, setViewMode] = useState('trailer')
+  const [selectedProvider, setSelectedProvider] = useState('akcloud')
+
   const mediaLabel = getMediaLabel(movie?.media_type)
   const mediaPluralLabel = getMediaPluralLabel(movie?.media_type)
   const isTvShow = movie?.media_type === 'tv'
+  const providers = useMemo(() => getStreamingProviders(), [])
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow
@@ -53,7 +55,30 @@ const MovieModal = ({
 
   useEffect(() => {
     setViewMode('trailer')
+    setSelectedProvider('akcloud')
   }, [movie?.id])
+
+  const currentStreamUrl = useMemo(() => {
+    if (!movie?.id || viewMode !== 'stream') return ''
+
+    const provider = providers.find((item) => item.id === selectedProvider)
+    if (!provider) return ''
+
+    if (isTvShow) {
+      if (!selectedSeasonNumber || !selectedEpisodeNumber) return ''
+      return provider.tvEpisodeUrl(movie.id, selectedSeasonNumber, selectedEpisodeNumber)
+    }
+
+    return provider.movieUrl(movie.id)
+  }, [
+    isTvShow,
+    movie?.id,
+    providers,
+    selectedEpisodeNumber,
+    selectedProvider,
+    selectedSeasonNumber,
+    viewMode
+  ])
 
   if (!movie) return null
 
@@ -70,81 +95,59 @@ const MovieModal = ({
 
           <div className="movie-modal-layout">
             <div className="movie-modal-poster-column">
-              <div className="movie-modal-hero-strip">
-                <div className="movie-modal-poster-shell">
+              <div className="movie-modal-poster-shell">
                 <img
                   src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '/no-movie.png'}
                   alt={movie.title}
                   className="movie-modal-poster"
                 />
-                </div>
-
-                <div className="movie-modal-mobile-meta-grid">
-                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
-                    <strong>Type</strong>
-                    <span>{mediaLabel}</span>
-                  </p>
-                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
-                    <strong>Release</strong>
-                    <span>{movie.release_date ? new Date(movie.release_date).toLocaleDateString() : 'N/A'}</span>
-                  </p>
-                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
-                    <strong>Rating</strong>
-                    <span>{movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A'} / 10</span>
-                  </p>
-                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
-                    <strong>Language</strong>
-                    <span>{movie.original_language ? movie.original_language.toUpperCase() : 'N/A'}</span>
-                  </p>
-                  <p className="movie-modal-meta-item movie-modal-meta-item-compact">
-                    <strong>Runtime</strong>
-                    <span>{movie.runtime ? `${movie.runtime} min` : 'N/A'}</span>
-                  </p>
-                </div>
               </div>
-
             </div>
 
             <div className="movie-modal-info-column">
-              <div className="movie-modal-metadata-grid">
-                <p className="movie-modal-meta-item">
-                  <strong>Type</strong>
-                  <span>{mediaLabel}</span>
-                </p>
-                <p className="movie-modal-meta-item">
-                  <strong>Release Date</strong>
-                  <span>{movie.release_date ? new Date(movie.release_date).toLocaleDateString() : 'N/A'}</span>
-                </p>
-                <p className="movie-modal-meta-item">
-                  <strong>Rating</strong>
-                  <span>{movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A'} / 10</span>
-                </p>
-                <p className="movie-modal-meta-item">
-                  <strong>Language</strong>
-                  <span>{movie.original_language ? movie.original_language.toUpperCase() : 'N/A'}</span>
-                </p>
-                <p className="movie-modal-meta-item">
-                  <strong>Runtime</strong>
-                  <span>{movie.runtime ? `${movie.runtime} min` : 'N/A'}</span>
-                </p>
+              <div className="movie-modal-summary-card">
+                <div className="movie-modal-title-block">
+                  <p className="movie-modal-kicker">{mediaLabel}</p>
+                  <h3 className="movie-modal-heading-main">{movie.title}</h3>
+                </div>
+
+                <div className="movie-modal-facts-inline">
+                  <span className="movie-modal-fact-pill">
+                    {movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A'}
+                  </span>
+                  <span className="movie-modal-fact-pill">
+                    {movie.vote_average ? `${movie.vote_average.toFixed(1)} / 10` : 'No rating'}
+                  </span>
+                  <span className="movie-modal-fact-pill">
+                    {movie.runtime ? `${movie.runtime} min` : 'Runtime N/A'}
+                  </span>
+                  <span className="movie-modal-fact-pill">
+                    {movie.original_language ? movie.original_language.toUpperCase() : 'N/A'}
+                  </span>
+                </div>
+
+                {movie.overview && (
+                  <p className="movie-modal-overview movie-modal-overview-compact">{movie.overview}</p>
+                )}
+
               </div>
 
-              <div className="movie-modal-switches">
-                <button
-                  onClick={() => setViewMode('trailer')}
-                  className={`movie-modal-tab ${viewMode === 'trailer' ? 'is-active' : ''}`}
-                >
-                  Trailer
-                </button>
-                <button
-                  onClick={() => setViewMode('stream')}
-                  className={`movie-modal-tab ${viewMode === 'stream' ? 'is-active' : ''}`}
-                >
-                  Stream {mediaLabel}
-                </button>
-              </div>
+              <div className="movie-modal-player-block movie-modal-media-section">
+                <div className="movie-modal-switches">
+                  <button
+                    onClick={() => setViewMode('trailer')}
+                    className={`movie-modal-tab ${viewMode === 'trailer' ? 'is-active' : ''}`}
+                  >
+                    Trailer
+                  </button>
+                  <button
+                    onClick={() => setViewMode('stream')}
+                    className={`movie-modal-tab ${viewMode === 'stream' ? 'is-active' : ''}`}
+                  >
+                    Stream {mediaLabel}
+                  </button>
+                </div>
 
-              <div className="movie-modal-player-block">
                 <h3 className="movie-modal-player-heading">
                   {viewMode === 'trailer' ? 'Trailer' : `Stream Full ${mediaLabel}`}
                 </h3>
@@ -191,19 +194,44 @@ const MovieModal = ({
                       src={trailerUrl}
                       title={`${movie.title} Trailer`}
                       className="movie-modal-iframe"
+                      loading="lazy"
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
                       allowFullScreen
                     />
                   </div>
                 )}
 
-                {viewMode === 'stream' && streamingUrl && (
+                {viewMode === 'stream' && currentStreamUrl && (
                   <div className="movie-modal-player-frame">
                     <iframe
-                      src={streamingUrl}
+                      src={currentStreamUrl}
                       title={`${movie.title} Stream`}
                       className="movie-modal-iframe"
+                      loading="lazy"
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      allow="autoplay; encrypted-media; picture-in-picture; web-share; fullscreen"
                       allowFullScreen
                     />
+                  </div>
+                )}
+
+                {viewMode === 'stream' && (
+                  <div className="movie-modal-streaming-providers">
+                    <h4 className="movie-modal-streaming-title">Select Streaming Server</h4>
+                    <div className="movie-modal-streaming-buttons">
+                      {providers.map((provider) => (
+                        <button
+                          key={provider.id}
+                          type="button"
+                          className={`movie-modal-streaming-button ${selectedProvider === provider.id ? 'is-active' : ''}`}
+                          onClick={() => setSelectedProvider(provider.id)}
+                        >
+                          <span className="movie-modal-streaming-button-label">Server</span>
+                          <span className="movie-modal-streaming-button-name">{provider.name}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -211,18 +239,14 @@ const MovieModal = ({
                   <p className="movie-modal-empty-state">Trailer is not available for this title.</p>
                 )}
 
-                {viewMode === 'stream' && !streamingUrl && (
+                {viewMode === 'stream' && !currentStreamUrl && (
                   <p className="movie-modal-empty-state">
                     {isTvShow
-                      ? 'Select a season and episode to load the 2Embed stream for this show.'
-                      : 'Stream is not available for this title.'}
+                      ? 'Select a season and episode to load the stream.'
+                      : 'Select a streaming server to watch.'}
                   </p>
                 )}
               </div>
-
-              {movie.overview && (
-                <p className="movie-modal-overview">{movie.overview}</p>
-              )}
 
               <div className="movie-modal-similar-block">
                 <div className="movie-modal-similar-header">

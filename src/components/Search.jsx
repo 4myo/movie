@@ -14,7 +14,7 @@ const Search = ({ searchTerm, setSearchTerm }) => {
 
               <input
               type = "text"
-              placeholder='Search through thousands of movies'
+              placeholder='Search titles (min. 3 characters)'
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               />

@@ -5,18 +5,19 @@ import Search from './components/Search.jsx'
 import Spinner from './components/Spinner.jsx'
 import MovieCard from './components/MovieCard.jsx'
 import MovieModal from './components/MovieModal.jsx'
+import AuthModal from './components/AuthModal.jsx'
 import { supabase } from './supabaseClient.js'
 import {
   getDetailPath,
   getMediaPluralLabel,
   getStreamingUrl,
-  getTMDBDetailEndpoint,
-  getTMDBGenreEndpoint,
+  getTrailerEmbedUrl,
   getTvEpisodeStreamingUrl,
   MEDIA_TYPE_OPTIONS,
   normalizeMediaItem,
   normalizeMediaList
 } from './utils/media.js'
+import { authApi } from './utils/auth.js'
 
 const API_BASE_URL = 'https://api.themoviedb.org/3'
 const API_KEY = import.meta.env.VITE_TMDB_API_KEY
@@ -29,16 +30,39 @@ const API_OPTIONS = {
   }
 }
 
-const FAVORITES_USER_ID = 'default'
+const SEARCH_MIN_LENGTH = 3
+const CACHE_TTL_MS = 60 * 1000
+const responseCache = new Map()
 
-const fetchJson = async (url) => {
-  const response = await fetch(url, API_OPTIONS)
+const getCacheEntry = (key) => {
+  const entry = responseCache.get(key)
 
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`)
+  if (!entry) return null
+
+  if (Date.now() > entry.expiresAt) {
+    responseCache.delete(key)
+    return null
   }
 
-  return response.json()
+  return entry.data
+}
+
+const setCacheEntry = (key, data, ttl = CACHE_TTL_MS) => {
+  responseCache.set(key, {
+    data,
+    expiresAt: Date.now() + ttl
+  })
+}
+
+const getCacheKey = (prefix, value) => `${prefix}:${value}`
+
+const fetchJson = async (key, request) => {
+  const cached = getCacheEntry(key)
+  if (cached) return cached
+
+  const data = await request()
+  setCacheEntry(key, data)
+  return data
 }
 
 const upsertRuntime = (items, runtimeMap) =>
@@ -83,11 +107,25 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
 
       try {
         const normalizedMediaType = mediaType === 'tv' ? 'tv' : 'movie'
-        const detailEndpoint = getTMDBDetailEndpoint(normalizedMediaType)
+        const detailEndpoint = normalizedMediaType === 'tv' ? 'tv' : 'movie'
 
         const [detailData, videoData] = await Promise.all([
-          fetchJson(`${API_BASE_URL}/${detailEndpoint}/${id}`),
-          fetchJson(`${API_BASE_URL}/${detailEndpoint}/${id}/videos`)
+          fetchJson(
+            `detail:${normalizedMediaType}:${id}`,
+            async () => {
+              const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${id}`, API_OPTIONS)
+              if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+              return response.json()
+            }
+          ),
+          fetchJson(
+            `videos:${normalizedMediaType}:${id}`,
+            async () => {
+              const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${id}/videos`, API_OPTIONS)
+              if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+              return response.json()
+            }
+          )
         ])
 
         const normalizedItem = normalizeMediaItem(detailData, normalizedMediaType)
@@ -98,7 +136,7 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
         const defaultSeasonNumber = validSeasons[0]?.season_number || null
 
         setMovie(normalizedItem)
-        setTrailerUrl(trailer ? `https://www.youtube.com/embed/${trailer.key}` : '')
+        setTrailerUrl(getTrailerEmbedUrl(trailer?.key))
         setSeasonOptions(validSeasons)
         setSelectedSeasonNumber(defaultSeasonNumber)
         setStreamingUrl(
@@ -128,7 +166,14 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
       }
 
       try {
-        const data = await fetchJson(`${API_BASE_URL}/tv/${movie.id}/season/${selectedSeasonNumber}`)
+        const data = await fetchJson(
+          `season:${movie.id}:${selectedSeasonNumber}`,
+          async () => {
+            const response = await fetch(`${API_BASE_URL}/tv/${movie.id}/season/${selectedSeasonNumber}`, API_OPTIONS)
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+            return response.json()
+          }
+        )
         const validEpisodes = (data.episodes || []).filter((episode) => episode.episode_number > 0)
         const defaultEpisodeNumber = validEpisodes[0]?.episode_number || null
 
@@ -166,8 +211,15 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
       setIsSimilarLoading(true)
 
       try {
-        const detailEndpoint = getTMDBDetailEndpoint(movie.media_type)
-        const data = await fetchJson(`${API_BASE_URL}/${detailEndpoint}/${movie.id}/similar`)
+        const detailEndpoint = movie.media_type === 'tv' ? 'tv' : 'movie'
+        const data = await fetchJson(
+          `similar:${movie.media_type}:${movie.id}`,
+          async () => {
+            const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${movie.id}/similar`, API_OPTIONS)
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+            return response.json()
+          }
+        )
         setSimilarMovies(normalizeMediaList((data.results || []).slice(0, 8), movie.media_type))
       } catch (error) {
         console.log(`Error fetching similar titles: ${error}`)
@@ -243,7 +295,10 @@ const AppShell = ({ children }) => (
 const BrowsePage = () => {
   const navigate = useNavigate()
   const location = useLocation()
+  const backgroundLocation = location.state?.backgroundLocation
+  const routeLocation = backgroundLocation || location
   const detailMatch = location.pathname.match(/^\/title\/(movie|tv)\/(\d+)$/)
+  const authMatch = location.pathname.match(/^\/account\/(login|signup)$/)
   const activeDetailMediaType = detailMatch?.[1] || null
   const activeDetailId = detailMatch?.[2] || null
   const [searchTerm, setSearchTerm] = useState('')
@@ -252,10 +307,12 @@ const BrowsePage = () => {
   const [trendingMovies, setTrendingMovies] = useState([])
   const [topRatedMovies, setTopRatedMovies] = useState([])
   const [favoriteMovies, setFavoriteMovies] = useState([])
+  const [recentlyWatchedMovies, setRecentlyWatchedMovies] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isTrendingLoading, setIsTrendingLoading] = useState(false)
   const [isTopRatedLoading, setIsTopRatedLoading] = useState(false)
   const [isFavoritesLoading, setIsFavoritesLoading] = useState(false)
+  const [isRecentlyWatchedLoading, setIsRecentlyWatchedLoading] = useState(false)
   const [debouncedSearchTerm] = useDebounce(searchTerm, 500)
   const [mediaFilter, setMediaFilter] = useState('movie')
   const [genreList, setGenreList] = useState([])
@@ -264,10 +321,15 @@ const BrowsePage = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [movieRuntimeMap, setMovieRuntimeMap] = useState({})
+  const [authUser, setAuthUser] = useState(null)
+  const [isAuthLoading, setIsAuthLoading] = useState(true)
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
+  const [authErrorMessage, setAuthErrorMessage] = useState('')
   const moviesSectionRef = useRef(null)
   const trendingRowRef = useRef(null)
   const topRatedRowRef = useRef(null)
   const favoritesRowRef = useRef(null)
+  const recentlyWatchedRowRef = useRef(null)
 
   const selectedGenreSet = useMemo(() => new Set(selectedGenreIds), [selectedGenreIds])
   const mediaPluralLabel = useMemo(() => getMediaPluralLabel(mediaFilter), [mediaFilter])
@@ -290,23 +352,46 @@ const BrowsePage = () => {
     )
   }, [favoriteMovies, mediaFilter, selectedGenreIds, selectedGenreSet])
 
+  const filteredRecentlyWatchedMovies = useMemo(() => {
+    const typeFilteredMovies = recentlyWatchedMovies.filter((movie) => movie.media_type === mediaFilter)
+
+    if (selectedGenreIds.length === 0) {
+      return typeFilteredMovies
+    }
+
+    return typeFilteredMovies.filter((movie) =>
+      movie.genre_ids?.some((genreId) => selectedGenreSet.has(genreId))
+    )
+  }, [mediaFilter, recentlyWatchedMovies, selectedGenreIds, selectedGenreSet])
+
   const favoriteMovieIds = useMemo(
     () => favoriteMovies.map((movie) => movie.id),
     [favoriteMovies]
   )
 
+  const isAuthenticated = Boolean(authUser)
+  const authMode = authMatch?.[1] === 'signup' ? 'signup' : 'login'
+  const isAuthRouteOpen = Boolean(authMatch)
+
   const enrichMoviesWithRuntime = (movies) => upsertRuntime(movies, movieRuntimeMap)
 
   const fetchGenres = async (selectedMediaFilter) => {
     try {
-      const mediaTypes = getSectionMediaTypes(selectedMediaFilter)
-      const genreResponses = await Promise.all(
-        mediaTypes.map(async (mediaType) => {
-          const endpoint = getTMDBGenreEndpoint(mediaType)
-          const data = await fetchJson(`${API_BASE_URL}/genre/${endpoint}/list`)
-          return data.genres || []
-        })
-      )
+        const mediaTypes = getSectionMediaTypes(selectedMediaFilter)
+        const genreResponses = await Promise.all(
+          mediaTypes.map(async (mediaType) => {
+            const endpoint = mediaType === 'tv' ? 'tv' : 'movie'
+            const data = await fetchJson(
+              `genres:${endpoint}`,
+              async () => {
+                const response = await fetch(`${API_BASE_URL}/genre/${endpoint}/list`, API_OPTIONS)
+                if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+                return response.json()
+              }
+            )
+            return data.genres || []
+          })
+        )
 
       const mergedGenres = genreResponses
         .flat()
@@ -324,18 +409,27 @@ const BrowsePage = () => {
     setErrorMessage('')
 
     try {
-      const detailEndpoint = getTMDBDetailEndpoint(selectedMediaFilter)
+      const normalizedQuery = query.trim()
+
+      if (normalizedQuery.length > 0 && normalizedQuery.length < SEARCH_MIN_LENGTH) {
+        setMovieList([])
+        setTotalPages(1)
+        setErrorMessage(`Enter at least ${SEARCH_MIN_LENGTH} characters to search`)
+        return
+      }
+
       const params = new URLSearchParams({
         page: page.toString(),
         include_adult: 'false',
         language: 'en-US'
       })
 
+      const detailEndpoint = selectedMediaFilter === 'tv' ? 'tv' : 'movie'
       let endpoint = `${API_BASE_URL}/discover/${detailEndpoint}`
 
-      if (query) {
+      if (normalizedQuery) {
+        params.set('query', normalizedQuery)
         endpoint = `${API_BASE_URL}/search/${detailEndpoint}`
-        params.set('query', query)
       } else {
         params.set('sort_by', 'popularity.desc')
       }
@@ -344,7 +438,21 @@ const BrowsePage = () => {
         params.set('with_genres', genreIds.join(','))
       }
 
-      const data = await fetchJson(`${endpoint}?${params.toString()}`)
+      const requestUrl = `${selectedMediaFilter}:${normalizedQuery}:${genreIds.join(',')}:${page}:${params.toString()}`
+      const cacheKey = getCacheKey('titles', requestUrl)
+      const data = getCacheEntry(cacheKey) || await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${endpoint}?${params.toString()}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        }
+      )
+
+      if (!getCacheEntry(cacheKey)) {
+        setCacheEntry(cacheKey, data)
+      }
+
       const normalizedResults = normalizeMediaList(data.results || [], selectedMediaFilter)
 
       setMovieList(enrichMoviesWithRuntime(normalizedResults))
@@ -362,7 +470,21 @@ const BrowsePage = () => {
     setIsTrendingLoading(true)
 
     try {
-      const data = await fetchJson(`${API_BASE_URL}/trending/${selectedMediaFilter}/week`)
+      const requestUrl = `${selectedMediaFilter}:week`
+      const cacheKey = getCacheKey('trending', requestUrl)
+      const data = getCacheEntry(cacheKey) || await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/trending/${selectedMediaFilter}/week`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        }
+      )
+
+      if (!getCacheEntry(cacheKey)) {
+        setCacheEntry(cacheKey, data)
+      }
+
       const results = normalizeMediaList((data.results || []).slice(0, 8), selectedMediaFilter)
 
       setTrendingMovies(enrichMoviesWithRuntime(results))
@@ -390,7 +512,20 @@ const BrowsePage = () => {
         params.set('with_genres', genreIds.join(','))
       }
 
-      const data = await fetchJson(`${API_BASE_URL}/discover/${selectedMediaFilter}?${params.toString()}`)
+      const requestUrl = `${selectedMediaFilter}:top-rated:${params.toString()}`
+      const cacheKey = getCacheKey('top-rated', requestUrl)
+      const data = getCacheEntry(cacheKey) || await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/discover/${selectedMediaFilter}?${params.toString()}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        }
+      )
+
+      if (!getCacheEntry(cacheKey)) {
+        setCacheEntry(cacheKey, data)
+      }
 
       setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 8), selectedMediaFilter)))
     } catch (error) {
@@ -402,37 +537,17 @@ const BrowsePage = () => {
   }
 
   const loadFavoriteMovies = async () => {
+    if (!isAuthenticated) {
+      setFavoriteMovies([])
+      setIsFavoritesLoading(false)
+      return
+    }
+
     setIsFavoritesLoading(true)
 
     try {
-      const { data: tableSample, error: tableSampleError } = await supabase
-        .from('favorite_movies')
-        .select('movie_data')
-        .limit(1)
-
-      if (tableSampleError) {
-        throw tableSampleError
-      }
-
-      if (!tableSample) {
-        setFavoriteMovies([])
-        return
-      }
-
-      const { data, error } = await supabase
-        .from('favorite_movies')
-        .select('movie_data')
-        .eq('user_id', FAVORITES_USER_ID)
-        .order('created_at', { ascending: false })
-
-      if (error) {
-        throw error
-      }
-
-      const favorites = (data || [])
-        .map((entry) => normalizeMediaItem(entry.movie_data, entry.movie_data?.media_type || 'movie'))
-        .filter(Boolean)
-
+      const data = await authApi.getFavorites(authUser.id)
+      const favorites = (data?.favorites || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
       setFavoriteMovies(enrichMoviesWithRuntime(favorites))
     } catch (error) {
       console.log(`Error loading favorites: ${error}`)
@@ -442,7 +557,34 @@ const BrowsePage = () => {
     }
   }
 
+  const loadRecentlyWatched = async () => {
+    if (!isAuthenticated) {
+      setRecentlyWatchedMovies([])
+      setIsRecentlyWatchedLoading(false)
+      return
+    }
+
+    setIsRecentlyWatchedLoading(true)
+
+    try {
+      const data = await authApi.getRecentlyWatched(authUser.id)
+      const items = (data?.items || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
+      setRecentlyWatchedMovies(enrichMoviesWithRuntime(items))
+    } catch (error) {
+      console.log(`Error loading recently watched titles: ${error}`)
+      setRecentlyWatchedMovies([])
+    } finally {
+      setIsRecentlyWatchedLoading(false)
+    }
+  }
+
   const toggleFavoriteMovie = async (movie) => {
+    if (!isAuthenticated) {
+      setAuthErrorMessage('')
+      navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+      return
+    }
+
     const isFavorite = favoriteMovieIds.includes(movie.id)
     const movieData = {
       ...movie,
@@ -461,40 +603,7 @@ const BrowsePage = () => {
     }
 
     try {
-      const { error: tableCheckError } = await supabase
-        .from('favorite_movies')
-        .select('movie_id')
-        .limit(1)
-
-      if (tableCheckError) {
-        throw tableCheckError
-      }
-
-      if (isFavorite) {
-        const { error } = await supabase
-          .from('favorite_movies')
-          .delete()
-          .eq('user_id', FAVORITES_USER_ID)
-          .eq('movie_id', movie.id)
-
-        if (error) {
-          throw error
-        }
-
-        return
-      }
-
-      const { error } = await supabase
-        .from('favorite_movies')
-        .upsert({
-          user_id: FAVORITES_USER_ID,
-          movie_id: movie.id,
-          movie_data: movieData
-        }, { onConflict: 'user_id,movie_id' })
-
-      if (error) {
-        throw error
-      }
+      await authApi.toggleFavorite(authUser.id, movieData)
     } catch (error) {
       console.log(`Error toggling favorite title: ${error}`)
 
@@ -510,10 +619,33 @@ const BrowsePage = () => {
   }
 
   const openTitleDetails = (movie) => {
+    if (isAuthenticated) {
+      authApi.trackRecentlyWatched(authUser.id, movie).catch((error) => {
+        console.log(`Error tracking recently watched title: ${error}`)
+      })
+
+      setRecentlyWatchedMovies((currentMovies) => {
+        const normalizedMovie = normalizeMediaItem(movie, movie.media_type || 'movie')
+        const withoutMovie = currentMovies.filter((entry) => entry.id !== normalizedMovie.id)
+        return [normalizedMovie, ...withoutMovie].slice(0, 12)
+      })
+    }
+
     navigate(getDetailPath(movie), { state: { backgroundLocation: location } })
   }
 
   const closeTitleDetails = () => {
+    if (location.state?.backgroundLocation) {
+      navigate(-1)
+      return
+    }
+
+    navigate('/')
+  }
+
+  const closeAuthModal = () => {
+    setAuthErrorMessage('')
+
     if (location.state?.backgroundLocation) {
       navigate(-1)
       return
@@ -581,7 +713,14 @@ const BrowsePage = () => {
     try {
       const runtimeEntries = await Promise.all(
         missingMovies.map(async (movie) => {
-          const detailEndpoint = getTMDBDetailEndpoint(movie.media_type)
+          const requestUrl = `${movie.media_type}:${movie.id}`
+          const cachedDetail = getCacheEntry(getCacheKey('detail', requestUrl))
+
+          if (cachedDetail) {
+            return [getRuntimeKey(movie), cachedDetail.runtime || cachedDetail.episode_run_time?.[0] || null]
+          }
+
+          const detailEndpoint = movie.media_type === 'tv' ? 'tv' : 'movie'
           const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${movie.id}`, API_OPTIONS)
 
           if (!response.ok) {
@@ -589,6 +728,7 @@ const BrowsePage = () => {
           }
 
           const data = await response.json()
+          setCacheEntry(getCacheKey('detail', requestUrl), data)
           const runtimeValue = data.runtime || data.episode_run_time?.[0] || null
           return [getRuntimeKey(movie), runtimeValue]
         })
@@ -631,8 +771,35 @@ const BrowsePage = () => {
     ))
 
   useEffect(() => {
-    loadFavoriteMovies()
+    const bootstrapAuth = async () => {
+      setIsAuthLoading(true)
+
+      try {
+        const data = await authApi.me()
+        setAuthUser(data?.user || null)
+      } catch (error) {
+        setAuthUser(null)
+      } finally {
+        setIsAuthLoading(false)
+      }
+    }
+
+    bootstrapAuth()
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user || null)
+      setIsAuthLoading(false)
+    })
+
+    return () => {
+      authListener.subscription.unsubscribe()
+    }
   }, [])
+
+  useEffect(() => {
+    loadFavoriteMovies()
+    loadRecentlyWatched()
+  }, [isAuthenticated])
 
   useEffect(() => {
     fetchGenres(mediaFilter)
@@ -684,6 +851,60 @@ const BrowsePage = () => {
   useEffect(() => {
     if (favoriteMovies.length > 0) fetchMovieRuntimes(favoriteMovies)
   }, [favoriteMovies])
+
+  useEffect(() => {
+    if (recentlyWatchedMovies.length > 0) fetchMovieRuntimes(recentlyWatchedMovies)
+  }, [recentlyWatchedMovies])
+
+  const handleAuthSubmit = async (payload) => {
+    setIsAuthSubmitting(true)
+    setAuthErrorMessage('')
+
+    try {
+      const data = authMode === 'signup'
+        ? await authApi.signup(payload)
+        : await authApi.login(payload)
+
+      setAuthUser(data?.user || null)
+      closeAuthModal()
+      return true
+    } catch (error) {
+      setAuthErrorMessage(error.message)
+      return false
+    } finally {
+      setIsAuthSubmitting(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+    } catch (error) {
+      console.log(`Error logging out: ${error}`)
+    } finally {
+      setAuthUser(null)
+      setFavoriteMovies([])
+      setRecentlyWatchedMovies([])
+    }
+  }
+
+  const LockedCollectionState = ({ title, message }) => (
+    <div className="locked-collection-state">
+      <p className="locked-collection-icon">🔒</p>
+      <h3 className="locked-collection-title">{title}</h3>
+      <p className="locked-collection-copy">{message}</p>
+      <button
+        type="button"
+        className="locked-collection-action"
+        onClick={() => {
+          setAuthErrorMessage('')
+          navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+        }}
+      >
+        Log in to unlock
+      </button>
+    </div>
+  )
 
   const PaginationControls = ({ position }) => (
     <div className={`pagination-bar ${position === 'bottom' ? 'is-bottom' : 'is-top'}`}>
@@ -802,6 +1023,36 @@ const BrowsePage = () => {
 
           <div className="desktop-main-column">
             <header>
+              <div className="account-toolbar">
+                <div className="account-toolbar-copy">
+                  <p className="account-toolbar-label">Account</p>
+                  <p className="account-toolbar-value">
+                    {isAuthLoading
+                      ? 'Checking session...'
+                      : isAuthenticated
+                        ? `Signed in as ${authUser?.user_metadata?.name || authUser?.email}`
+                        : 'Browse as guest or sign in to unlock personal features'}
+                  </p>
+                </div>
+
+                {isAuthenticated ? (
+                  <button type="button" className="account-toolbar-button is-secondary" onClick={handleLogout}>
+                    Log out
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="account-toolbar-button"
+                    onClick={() => {
+                      setAuthErrorMessage('')
+                      navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+                    }}
+                  >
+                    Log in / Sign up
+                  </button>
+                )}
+              </div>
+
               <h1>Find <span className="text-gradient">movies, shows, and series</span> you want to watch</h1>
 
               <section className="media-switcher mobile-only-panel" aria-labelledby="mobile-media-switcher-heading">
@@ -974,6 +1225,55 @@ const BrowsePage = () => {
                 )}
               </section>
 
+              <section className="trending-showcase recent-showcase desktop-hidden-panel" aria-labelledby="mobile-recently-watched-heading">
+                <div className="trending-showcase-header">
+                  <div>
+                    <p className="trending-showcase-label">Your history</p>
+                    <h2 id="mobile-recently-watched-heading" className="trending-showcase-title">Recently Watched</h2>
+                  </div>
+
+                  <div className="trending-showcase-meta">
+                    <p className="trending-showcase-copy">Jump back into the titles you opened most recently.</p>
+                    {isAuthenticated && (
+                      <div className="trending-showcase-controls" aria-label="Scroll recently watched titles">
+                        <button type="button" className="trending-scroll-button" onClick={() => scrollRow(recentlyWatchedRowRef, 'left')}>
+                          ←
+                        </button>
+                        <button type="button" className="trending-scroll-button" onClick={() => scrollRow(recentlyWatchedRowRef, 'right')}>
+                          →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {!isAuthenticated ? (
+                  <LockedCollectionState
+                    title="Recently watched is locked"
+                    message="Log in to see your recently watched titles across desktop and mobile."
+                  />
+                ) : isRecentlyWatchedLoading ? (
+                  <div className="trending-showcase-row skeleton-showcase-row">
+                    {renderShowcaseSkeletons(5)}
+                  </div>
+                ) : filteredRecentlyWatchedMovies.length > 0 ? (
+                  <div className="trending-showcase-row" ref={recentlyWatchedRowRef}>
+                    {filteredRecentlyWatchedMovies.map((movie) => (
+                      <MovieCard
+                        key={`mobile-recent-${movie.media_type}-${movie.id}`}
+                        movie={movie}
+                        onWatchTrailer={openTitleDetails}
+                        onToggleFavorite={toggleFavoriteMovie}
+                        isFavorite={favoriteMovieIds.includes(movie.id)}
+                        compact
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="trending-showcase-empty">Open a title to start building your recently watched list.</p>
+                )}
+              </section>
+
               <section className="trending-showcase favorites-showcase desktop-hidden-panel" aria-labelledby="mobile-favorites-movies-heading">
                 <div className="trending-showcase-header">
                   <div>
@@ -998,7 +1298,12 @@ const BrowsePage = () => {
                   </div>
                 </div>
 
-                {isFavoritesLoading ? (
+                {!isAuthenticated ? (
+                  <LockedCollectionState
+                    title="Favorites are locked"
+                    message="Log in to see your favorites and watchlist on any device."
+                  />
+                ) : isFavoritesLoading ? (
                   <div className="trending-showcase-row skeleton-showcase-row">
                     {renderShowcaseSkeletons(5)}
                   </div>
@@ -1011,6 +1316,7 @@ const BrowsePage = () => {
                         onWatchTrailer={openTitleDetails}
                         onToggleFavorite={toggleFavoriteMovie}
                         isFavorite
+                        isFavoriteLocked={!isAuthenticated}
                         compact
                       />
                     ))}
@@ -1061,6 +1367,7 @@ const BrowsePage = () => {
                         onWatchTrailer={openTitleDetails}
                         onToggleFavorite={toggleFavoriteMovie}
                         isFavorite={favoriteMovieIds.includes(movie.id)}
+                        isFavoriteLocked={!isAuthenticated}
                       />
                     ))}
                   </ul>
@@ -1072,6 +1379,47 @@ const BrowsePage = () => {
           </div>
 
           <aside className="desktop-sidebar desktop-sidebar-right">
+            <section className="trending-showcase recent-showcase desktop-favorites-panel" aria-labelledby="recently-watched-heading">
+              <div className="trending-showcase-header desktop-favorites-header">
+                <div>
+                  <p className="trending-showcase-label">Your history</p>
+                  <h2 id="recently-watched-heading" className="trending-showcase-title">Recently Watched</h2>
+                </div>
+
+                <p className="trending-showcase-copy">
+                  Pick up where you left off whenever you come back.
+                </p>
+              </div>
+
+              {!isAuthenticated ? (
+                <LockedCollectionState
+                  title="Recently watched is locked"
+                  message="Log in to unlock your recently watched list and keep it synced."
+                />
+              ) : isRecentlyWatchedLoading ? (
+                <div className="desktop-favorites-list">
+                  {renderShowcaseSkeletons(5)}
+                </div>
+              ) : filteredRecentlyWatchedMovies.length > 0 ? (
+                <div className="desktop-favorites-list custom-scrollbar" ref={recentlyWatchedRowRef}>
+                  {filteredRecentlyWatchedMovies.map((movie) => (
+                    <MovieCard
+                      key={`recent-${movie.media_type}-${movie.id}`}
+                      movie={movie}
+                      onWatchTrailer={openTitleDetails}
+                      onToggleFavorite={toggleFavoriteMovie}
+                      isFavorite={favoriteMovieIds.includes(movie.id)}
+                      compact
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="trending-showcase-empty desktop-favorites-empty">
+                  Open a title to start building your recently watched list.
+                </p>
+              )}
+            </section>
+
             <section className="trending-showcase favorites-showcase desktop-favorites-panel" aria-labelledby="favorites-movies-heading">
               <div className="trending-showcase-header desktop-favorites-header">
                 <div>
@@ -1086,22 +1434,28 @@ const BrowsePage = () => {
                 </p>
               </div>
 
-              {isFavoritesLoading ? (
+              {!isAuthenticated ? (
+                <LockedCollectionState
+                  title="Favorites are locked"
+                  message="Log in to unlock your favorites and watchlist."
+                />
+              ) : isFavoritesLoading ? (
                 <div className="desktop-favorites-list">
                   {renderShowcaseSkeletons(5)}
                 </div>
               ) : filteredFavoriteMovies.length > 0 ? (
                 <div className="desktop-favorites-list custom-scrollbar" ref={favoritesRowRef}>
                   {filteredFavoriteMovies.map((movie) => (
-                    <MovieCard
-                      key={`favorite-${movie.media_type}-${movie.id}`}
-                      movie={movie}
-                      onWatchTrailer={openTitleDetails}
-                      onToggleFavorite={toggleFavoriteMovie}
-                      isFavorite
-                      compact
-                    />
-                  ))}
+                      <MovieCard
+                        key={`favorite-${movie.media_type}-${movie.id}`}
+                        movie={movie}
+                        onWatchTrailer={openTitleDetails}
+                        onToggleFavorite={toggleFavoriteMovie}
+                        isFavorite
+                        isFavoriteLocked={!isAuthenticated}
+                        compact
+                      />
+                    ))}
                 </div>
               ) : (
                 <p className="trending-showcase-empty desktop-favorites-empty">
@@ -1135,6 +1489,20 @@ const BrowsePage = () => {
           onToggleFavorite={toggleFavoriteMovie}
           onOpenTitle={openTitleDetails}
           onClose={closeTitleDetails}
+        />
+      )}
+
+      {isAuthRouteOpen && (
+        <AuthModal
+          mode={authMode}
+          onClose={closeAuthModal}
+          onModeChange={(nextMode) => {
+            setAuthErrorMessage('')
+            navigate(`/account/${nextMode}`, { state: { backgroundLocation: routeLocation }, replace: true })
+          }}
+          onSubmit={handleAuthSubmit}
+          isSubmitting={isAuthSubmitting}
+          errorMessage={authErrorMessage}
         />
       )}
     </AppShell>

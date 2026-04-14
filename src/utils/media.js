@@ -48,25 +48,75 @@ export const getDetailPath = (item) => {
 }
 
 export const getTrailerEmbedUrl = (videoKey) =>
-  videoKey ? `https://www.youtube.com/embed/${videoKey}` : ''
+  videoKey
+    ? `https://www.youtube-nocookie.com/embed/${videoKey}?rel=0&modestbranding=1&playsinline=1`
+    : ''
 
-export const getStreamingUrl = (item) => {
+export const getStreamingUrl = (item, provider = 'akcloud') => {
   if (!item?.id) return ''
 
   if ((item.media_type || 'movie') === 'tv') {
     return ''
   }
 
-  return `https://www.2embed.online/embed/movie/${item.id}`
+  if (provider === 'akcloud') {
+    return `https://vidsrc.xyz/embed/movie?tmdb=${item.id}`
+  }
+
+  return `https://moviesapi.club/movie/${item.id}`
 }
 
-export const getTvEpisodeStreamingUrl = (showId, seasonNumber, episodeNumber) => {
+export const getTvEpisodeStreamingUrl = (showId, seasonNumber, episodeNumber, provider = 'akcloud') => {
   if (!showId || !seasonNumber || !episodeNumber) return ''
-  return `https://www.2embed.online/embed/tv/${showId}/${seasonNumber}/${episodeNumber}`
+
+  if (provider === 'akcloud') {
+    return `https://vidsrc.xyz/embed/tv?tmdb=${showId}&season=${seasonNumber}&episode=${episodeNumber}`
+  }
+
+  return `https://moviesapi.club/tv/${showId}-${seasonNumber}-${episodeNumber}`
 }
+
+export const getStreamingProviders = () => [
+  {
+    id: 'akcloud',
+    name: 'AK Cloud',
+    movieUrl: (id) => `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
+    tvEpisodeUrl: (id, season, episode) => `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+    movieEmbed: (id) => `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
+    movieDetail: (id) => `https://vidsrc.xyz/embed/movie?tmdb=${id}`
+  },
+  {
+    id: 'megacloud',
+    name: 'MEGA Cloud',
+    movieUrl: (id) => `https://moviesapi.club/movie/${id}`,
+    tvEpisodeUrl: (id, season, episode) => `https://moviesapi.club/tv/${id}-${season}-${episode}`,
+    movieEmbed: (id) => `https://moviesapi.club/movie/${id}`,
+    movieDetail: (id) => `https://moviesapi.club/movie/${id}`
+  }
+]
 
 export const getTMDBGenreEndpoint = (mediaType) =>
   mediaType === 'tv' ? 'tv' : 'movie'
 
 export const getTMDBDetailEndpoint = (mediaType) =>
   mediaType === 'tv' ? 'tv' : 'movie'
+
+export const getProviderMovieUrl = (providerId, itemId) => {
+  const providers = getStreamingProviders()
+  const provider = providers.find(p => p.id === providerId)
+  return provider ? provider.movieUrl(itemId) : ''
+}
+
+export const getProviderTvEpisodeUrl = (providerId, showId, season, episode) => {
+  const providers = getStreamingProviders()
+  const provider = providers.find(p => p.id === providerId)
+  return provider ? provider.tvEpisodeUrl(showId, season, episode) : ''
+}
+
+export const getMovieModalStreamingAlternatives = (itemId) => {
+  const providers = getStreamingProviders()
+  return providers.map(provider => ({
+    ...provider,
+    url: provider.movieUrl(itemId)
+  }))
+}

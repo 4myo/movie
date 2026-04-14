@@ -1,7 +1,7 @@
 import React from 'react'
 import { getMediaLabel } from '../utils/media.js'
 
-const MovieCard = ({ movie, onWatchTrailer, onToggleFavorite, isFavorite = false, compact = false }) => {
+const MovieCard = ({ movie, onWatchTrailer, onToggleFavorite, isFavorite = false, compact = false, isFavoriteLocked = false }) => {
   const { title, vote_average, poster_path, release_date, original_language, runtime, media_type } = movie
   const formattedRuntime = runtime ? `${runtime} min` : 'N/A'
   const mediaLabel = getMediaLabel(media_type)
@@ -29,12 +29,16 @@ const MovieCard = ({ movie, onWatchTrailer, onToggleFavorite, isFavorite = false
       >
         <button
           type="button"
-          className={`movie-card-favorite ${isFavorite ? 'is-active' : ''}`}
+          className={`movie-card-favorite ${isFavorite ? 'is-active' : ''} ${isFavoriteLocked ? 'is-locked' : ''}`}
           onClick={handleFavoriteClick}
-          aria-label={isFavorite ? `Remove ${title} from favorites` : `Save ${title} to favorites`}
+          aria-label={isFavoriteLocked
+            ? 'Log in to unlock favorites'
+            : isFavorite
+              ? `Remove ${title} from favorites`
+              : `Save ${title} to favorites`}
         >
-          {isFavorite ? '♥' : '♡'}
-       </button>
+          {isFavoriteLocked ? '🔒' : isFavorite ? '♥' : '♡'}
+        </button>
 
        <img src={poster_path ?
         `https://image.tmdb.org/t/p/w500${poster_path}` : '/no-movie.png'}
