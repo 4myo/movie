@@ -1147,6 +1147,18 @@
     @apply mt-2 text-[11px] leading-5 text-slate-400;
   }
 
+  .site-footer-actions {
+    @apply mt-4 flex justify-start;
+  }
+
+  .site-footer-action-button {
+    @apply inline-flex min-h-10 items-center justify-center rounded-xl border border-white/10 bg-white/6 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/12;
+  }
+
+  .site-footer-notice {
+    @apply rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5;
+  }
+
   @media (min-width: 1280px) {
     .wrapper {
       max-width: 1880px;

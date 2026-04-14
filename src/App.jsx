@@ -325,6 +325,7 @@ const BrowsePage = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [authErrorMessage, setAuthErrorMessage] = useState('')
+  const [deletionNotice, setDeletionNotice] = useState('')
   const moviesSectionRef = useRef(null)
   const trendingRowRef = useRef(null)
   const topRatedRowRef = useRef(null)
@@ -886,6 +887,35 @@ const BrowsePage = () => {
       setFavoriteMovies([])
       setRecentlyWatchedMovies([])
     }
+  }
+
+  const handleDeletionRequest = () => {
+    if (!isAuthenticated) {
+      setAuthErrorMessage('Please log in to request account data deletion.')
+      navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+      return
+    }
+
+    const confirmed = window.confirm(
+      'This will permanently delete your account together with your favorites and recently watched history. Once completed, you will lose access to this account and this action cannot be undone. Continue?'
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    authApi.deleteAccount()
+      .then(async () => {
+        await authApi.logout()
+        setAuthUser(null)
+        setFavoriteMovies([])
+        setRecentlyWatchedMovies([])
+        setDeletionNotice('Your account, favorites, and recently watched history have been permanently deleted. You have been signed out.')
+      })
+      .catch((error) => {
+        console.log(`Error deleting account: ${error}`)
+        setDeletionNotice('We could not complete your account deletion right now. Please try again later.')
+      })
   }
 
   const LockedCollectionState = ({ title, message }) => (
@@ -1477,6 +1507,20 @@ const BrowsePage = () => {
             <p className="site-footer-copy site-footer-copy-muted">
               TMDB data is used for browsing and discovery. This project is an independent demo experience and is not endorsed by or certified by TMDB.
             </p>
+            <p className="site-footer-copy site-footer-copy-muted">
+              If you create an account, limited profile-related data such as your authentication record, favorites, and recently watched titles may be stored to provide core features. This information is not displayed publicly, sold, or intentionally shared with other users through the app interface.
+            </p>
+            <p className="site-footer-copy site-footer-copy-muted">
+              Users may request deletion of their stored account-related data at any time. This demo is not legal advice, does not create a formal privacy policy, and should be reviewed and expanded before any production or public commercial use.
+            </p>
+            <div className="site-footer-actions">
+              <button type="button" className="site-footer-action-button" onClick={handleDeletionRequest}>
+                Request data deletion
+              </button>
+            </div>
+            {deletionNotice && (
+              <p className="site-footer-copy site-footer-copy-muted site-footer-notice">{deletionNotice}</p>
+            )}
           </div>
         </footer>
       </div>
