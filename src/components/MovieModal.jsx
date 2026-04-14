@@ -1,10 +1,17 @@
 import React, { useEffect, useState } from 'react'
 import MovieCard from './MovieCard.jsx'
+import { getMediaLabel, getMediaPluralLabel } from '../utils/media.js'
 
 const MovieModal = ({
   movie,
   trailerUrl,
   streamingUrl,
+  seasonOptions = [],
+  selectedSeasonNumber = null,
+  selectedEpisodeNumber = null,
+  episodeOptions = [],
+  onSeasonChange,
+  onEpisodeChange,
   onClose,
   similarMovies = [],
   isSimilarLoading = false,
@@ -13,6 +20,9 @@ const MovieModal = ({
   favoriteMovieIds = []
 }) => {
   const [viewMode, setViewMode] = useState('trailer')
+  const mediaLabel = getMediaLabel(movie?.media_type)
+  const mediaPluralLabel = getMediaPluralLabel(movie?.media_type)
+  const isTvShow = movie?.media_type === 'tv'
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow
@@ -98,13 +108,17 @@ const MovieModal = ({
                   onClick={() => setViewMode('stream')}
                   className={`movie-modal-tab ${viewMode === 'stream' ? 'is-active' : ''}`}
                 >
-                  Stream Movie
+                  Stream {mediaLabel}
                 </button>
               </div>
             </div>
 
             <div className="movie-modal-info-column">
               <div className="movie-modal-metadata-grid">
+                <p className="movie-modal-meta-item">
+                  <strong>Type</strong>
+                  <span>{mediaLabel}</span>
+                </p>
                 <p className="movie-modal-meta-item">
                   <strong>Release Date</strong>
                   <span>{movie.release_date ? new Date(movie.release_date).toLocaleDateString() : 'N/A'}</span>
@@ -129,8 +143,44 @@ const MovieModal = ({
 
               <div className="movie-modal-player-block">
                 <h3 className="movie-modal-player-heading">
-                  {viewMode === 'trailer' ? 'Trailer' : 'Stream Full Movie'}
+                  {viewMode === 'trailer' ? 'Trailer' : `Stream Full ${mediaLabel}`}
                 </h3>
+
+                {viewMode === 'stream' && isTvShow && (
+                  <div className="episode-selector-panel">
+                    <div className="episode-selector-field">
+                      <label htmlFor="season-select" className="episode-selector-label">Season</label>
+                      <select
+                        id="season-select"
+                        className="episode-selector-input"
+                        value={selectedSeasonNumber ?? ''}
+                        onChange={(event) => onSeasonChange?.(Number(event.target.value))}
+                      >
+                        {seasonOptions.map((season) => (
+                          <option key={season.season_number} value={season.season_number}>
+                            {season.name || `Season ${season.season_number}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="episode-selector-field">
+                      <label htmlFor="episode-select" className="episode-selector-label">Episode</label>
+                      <select
+                        id="episode-select"
+                        className="episode-selector-input"
+                        value={selectedEpisodeNumber ?? ''}
+                        onChange={(event) => onEpisodeChange?.(Number(event.target.value))}
+                      >
+                        {episodeOptions.map((episode) => (
+                          <option key={episode.episode_number} value={episode.episode_number}>
+                            Episode {episode.episode_number}: {episode.name || 'Untitled'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
 
                 {viewMode === 'trailer' && trailerUrl && (
                   <div className="movie-modal-player-frame">
@@ -159,13 +209,17 @@ const MovieModal = ({
                 )}
 
                 {viewMode === 'stream' && !streamingUrl && (
-                  <p className="movie-modal-empty-state">Stream is not available for this title.</p>
+                  <p className="movie-modal-empty-state">
+                    {isTvShow
+                      ? 'Select a season and episode to load the 2Embed stream for this show.'
+                      : 'Stream is not available for this title.'}
+                  </p>
                 )}
               </div>
 
               <div className="movie-modal-similar-block">
                 <div className="movie-modal-similar-header">
-                  <h3 className="movie-modal-player-heading">Similar Movies</h3>
+                  <h3 className="movie-modal-player-heading">Similar {mediaPluralLabel}</h3>
                   <p className="movie-modal-similar-copy">Keep browsing titles related to this pick.</p>
                 </div>
 

@@ -144,6 +144,73 @@
     padding-bottom: calc(3rem + env(safe-area-inset-bottom));
   }
 
+  .desktop-shell {
+    @apply flex flex-col gap-6;
+  }
+
+  .desktop-sidebar {
+    @apply hidden;
+  }
+
+  .desktop-main-column {
+    @apply min-w-0;
+  }
+
+  .mobile-only-panel,
+  .desktop-hidden-panel {
+    @apply block;
+  }
+
+  .desktop-sidebar-stack {
+    @apply flex flex-col gap-5;
+  }
+
+  .media-switcher {
+    @apply rounded-[1.5rem] border border-white/8 bg-white/[0.04] p-4 text-left shadow-xl shadow-black/15 backdrop-blur-sm sm:p-4.5;
+    background:
+      radial-gradient(circle at top left, rgba(34, 211, 238, 0.1), transparent 24%),
+      radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.08), transparent 26%),
+      linear-gradient(180deg, rgba(11, 18, 30, 0.8) 0%, rgba(8, 13, 24, 0.9) 100%);
+  }
+
+  .media-switcher-copy {
+    @apply flex flex-col gap-1.5 pr-0 sm:max-w-2xl;
+  }
+
+  .media-switcher-label {
+    @apply text-[11px] font-medium uppercase tracking-[0.28em] text-cyan-200/75;
+  }
+
+  .media-switcher-title {
+    @apply text-xl font-bold text-white sm:text-2xl;
+  }
+
+  .media-switcher-text {
+    @apply max-w-xl text-sm leading-5 text-slate-300;
+  }
+
+  .media-switcher-grid {
+    @apply mt-4 grid gap-2.5 sm:grid-cols-2;
+  }
+
+  .media-switcher-card {
+    @apply flex min-h-[92px] flex-col justify-between rounded-[1.15rem] border border-white/8 bg-[#12192a]/78 px-4 py-3 text-left transition duration-200 hover:-translate-y-0.5 hover:border-white/16 hover:bg-[#182135]/88;
+  }
+
+  .media-switcher-card.is-active {
+    @apply border-cyan-300/18 shadow-lg shadow-cyan-950/20;
+    background:
+      linear-gradient(135deg, rgba(41, 88, 108, 0.92), rgba(66, 69, 49, 0.92));
+  }
+
+  .media-switcher-card-title {
+    @apply text-base font-semibold text-white;
+  }
+
+  .media-switcher-card-copy {
+    @apply mt-2 text-[13px] leading-5 text-slate-300;
+  }
+
   .trending-showcase {
     @apply rounded-[2rem] border border-amber-300/15 bg-white/6 p-5 text-left shadow-2xl shadow-black/20 backdrop-blur-sm sm:p-6;
     background:
@@ -168,6 +235,22 @@
       radial-gradient(circle at right center, rgba(236, 72, 153, 0.12), transparent 34%),
       linear-gradient(180deg, rgba(31, 11, 30, 0.84) 0%, rgba(22, 8, 24, 0.94) 100%);
     border-color: rgba(251, 113, 133, 0.16);
+  }
+
+  .desktop-favorites-panel {
+    @apply mt-0;
+  }
+
+  .desktop-favorites-header {
+    @apply items-start;
+  }
+
+  .desktop-favorites-list {
+    @apply mt-6 flex gap-3 overflow-x-auto pb-2;
+  }
+
+  .desktop-favorites-empty {
+    @apply mt-6;
   }
 
   .trending-showcase-header {
@@ -374,6 +457,10 @@
     @apply mt-6 rounded-3xl border border-light-100/10 bg-white/5 p-4 text-left shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6;
   }
 
+  .desktop-genre-filter {
+    @apply mt-0;
+  }
+
   .genre-filter-header {
     @apply flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between;
   }
@@ -423,16 +510,18 @@
   }
 
   .movie-card {
-    @apply relative bg-dark-100 p-3 rounded-2xl shadow-inner shadow-light-100/10 transition duration-200 sm:p-4 lg:p-5;
+    @apply relative cursor-pointer bg-dark-100 p-3 rounded-2xl shadow-inner shadow-light-100/10 transition duration-200 sm:p-4 lg:p-5;
 
     &:hover {
       transform: translateY(-6px);
       box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
     }
 
+    &:focus-visible,
     &:focus-within {
       transform: translateY(-4px);
       box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.28), 0 18px 34px rgba(0, 0, 0, 0.26);
+      outline: none;
     }
 
     & img {
@@ -492,6 +581,10 @@
     @apply mt-2.5 sm:mt-3 lg:mt-4;
   }
 
+  .media-pill {
+    @apply mt-2 inline-flex rounded-full border border-white/10 bg-white/6 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-100;
+  }
+
   .movie-card-body-compact {
     @apply mt-2;
   }
@@ -514,10 +607,6 @@
   .movie-card-compact .content .year,
   .movie-card-compact .content .runtime {
     @apply text-[10px] sm:text-[11px];
-  }
-
-  .movie-card-button-compact {
-    @apply mt-2 min-h-8 w-full px-2.5 py-1.5 text-[11px] sm:min-h-9 sm:px-3 sm:text-[12px];
   }
 
   .movie-card-favorite {
@@ -571,6 +660,22 @@
 
   .movie-modal-backdrop {
     @apply fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-6;
+  }
+
+  .details-loading-shell {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm;
+  }
+
+  .details-error-card {
+    @apply mx-4 flex w-full max-w-md flex-col gap-4 rounded-[1.75rem] border border-white/10 bg-[#090516]/95 p-6 text-left shadow-2xl shadow-black/50;
+  }
+
+  .details-error-card h2 {
+    @apply text-2xl font-bold text-white;
+  }
+
+  .details-error-card p {
+    @apply text-sm leading-6 text-light-200;
   }
 
   .movie-modal-panel {
@@ -722,6 +827,22 @@
     @apply flex flex-col gap-4;
   }
 
+  .episode-selector-panel {
+    @apply grid gap-3 rounded-2xl border border-white/8 bg-white/5 p-4 sm:grid-cols-2;
+  }
+
+  .episode-selector-field {
+    @apply flex flex-col gap-2;
+  }
+
+  .episode-selector-label {
+    @apply text-xs font-semibold uppercase tracking-[0.18em] text-light-200;
+  }
+
+  .episode-selector-input {
+    @apply min-h-11 rounded-xl border border-white/10 bg-[#130d24] px-4 py-3 text-sm text-white outline-hidden transition focus:border-cyan-300/40;
+  }
+
   .movie-modal-player-heading {
     @apply text-xl font-semibold text-white;
   }
@@ -776,6 +897,126 @@
 
   .site-footer-copy-muted {
     @apply mt-2 text-[11px] leading-5 text-slate-400;
+  }
+
+  @media (min-width: 1280px) {
+    .wrapper {
+      max-width: 1880px;
+      padding-left: 2rem;
+      padding-right: 2rem;
+    }
+
+    .desktop-shell {
+      display: grid;
+      grid-template-columns: minmax(250px, 290px) minmax(980px, 1fr) minmax(270px, 320px);
+      gap: 2rem;
+      align-items: start;
+    }
+
+    .desktop-sidebar {
+      display: block;
+      position: sticky;
+      top: calc(1.25rem + env(safe-area-inset-top));
+      align-self: start;
+      height: fit-content;
+    }
+
+    .desktop-sidebar-left {
+      min-width: 0;
+    }
+
+    .desktop-sidebar-right {
+      min-width: 0;
+    }
+
+    .desktop-sidebar-stack {
+      position: sticky;
+      top: calc(1.25rem + env(safe-area-inset-top));
+    }
+
+    .desktop-main-column {
+      min-width: 0;
+      width: 100%;
+    }
+
+    .desktop-main-column header {
+      margin-top: 0;
+    }
+
+    .desktop-main-column .media-switcher,
+    .desktop-main-column .genre-filter-shell,
+    .desktop-main-column .favorites-showcase {
+      display: none;
+    }
+
+    .desktop-main-column .mobile-only-panel,
+    .desktop-main-column .desktop-hidden-panel {
+      display: none;
+    }
+
+    .desktop-favorites-panel {
+      display: flex;
+      flex-direction: column;
+      padding: 1.25rem;
+      min-height: 22rem;
+      max-height: calc(100vh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    }
+
+    .desktop-favorites-header {
+      gap: 0.75rem;
+    }
+
+    .desktop-favorites-list {
+      margin-top: 1.25rem;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 0.25rem;
+      padding-bottom: 0.25rem;
+    }
+
+    .desktop-favorites-list .movie-card-compact,
+    .desktop-favorites-list .movie-card-skeleton-compact {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .desktop-favorites-empty {
+      margin-top: 1.25rem;
+    }
+
+    .media-switcher {
+      padding: 1rem;
+    }
+
+    .media-switcher-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .genre-filter-shell {
+      padding: 1rem;
+    }
+
+    .genre-filter-panel {
+      max-height: none;
+      overflow: visible;
+      opacity: 1;
+    }
+
+    .genre-filter-header {
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+
+    .genre-filter-toggle {
+      width: 100%;
+    }
+
+    .genre-chip-grid {
+      max-height: 22rem;
+    }
   }
 }
 
