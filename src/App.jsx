@@ -54,7 +54,7 @@ const getSectionMediaTypes = (mediaFilter) => {
   return ['tv']
 }
 
-const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle }) => {
+const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onClose }) => {
   const navigate = useNavigate()
   const [movie, setMovie] = useState(null)
   const [trailerUrl, setTrailerUrl] = useState('')
@@ -198,7 +198,7 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
               ? 'This title could not be loaded from TMDB right now.'
               : 'This title is not available.'}
           </p>
-          <button type="button" className="movie-modal-close" onClick={() => navigate('/')}>
+          <button type="button" className="movie-modal-close" onClick={onClose}>
             Back to home
           </button>
         </div>
@@ -217,7 +217,7 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
       episodeOptions={episodeOptions}
       onSeasonChange={setSelectedSeasonNumber}
       onEpisodeChange={setSelectedEpisodeNumber}
-      onClose={() => navigate('/')}
+      onClose={onClose}
       similarMovies={similarMovies}
       isSimilarLoading={isSimilarLoading}
       onWatchTrailer={onOpenTitle}
@@ -511,6 +511,15 @@ const BrowsePage = () => {
 
   const openTitleDetails = (movie) => {
     navigate(getDetailPath(movie), { state: { backgroundLocation: location } })
+  }
+
+  const closeTitleDetails = () => {
+    if (location.state?.backgroundLocation) {
+      navigate(-1)
+      return
+    }
+
+    navigate('/')
   }
 
   const toggleGenre = (genreId) => {
@@ -1125,6 +1134,7 @@ const BrowsePage = () => {
           favoriteMovieIds={favoriteMovieIds}
           onToggleFavorite={toggleFavoriteMovie}
           onOpenTitle={openTitleDetails}
+          onClose={closeTitleDetails}
         />
       )}
     </AppShell>
