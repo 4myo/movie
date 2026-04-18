@@ -196,7 +196,7 @@ const MovieModal = ({
                       className="movie-modal-iframe"
                       loading="lazy"
                       referrerPolicy="strict-origin-when-cross-origin"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                      allow="accelerometer *; autoplay *; clipboard-write *; encrypted-media *; gyroscope *; picture-in-picture *; web-share *; fullscreen *"
                       allowFullScreen
                     />
                   </div>
@@ -210,7 +210,7 @@ const MovieModal = ({
                       className="movie-modal-iframe"
                       loading="lazy"
                       referrerPolicy="strict-origin-when-cross-origin"
-                      allow="autoplay; encrypted-media; picture-in-picture; web-share; fullscreen"
+                      allow="autoplay *; encrypted-media *; picture-in-picture *; web-share *; fullscreen *"
                       allowFullScreen
                     />
                   </div>

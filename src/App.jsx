@@ -342,28 +342,24 @@ const BrowsePage = () => {
   }, [genreList, selectedGenreIds])
 
   const filteredFavoriteMovies = useMemo(() => {
-    const typeFilteredFavorites = favoriteMovies.filter((movie) => movie.media_type === mediaFilter)
-
     if (selectedGenreIds.length === 0) {
-      return typeFilteredFavorites
+      return favoriteMovies
     }
 
-    return typeFilteredFavorites.filter((movie) =>
+    return favoriteMovies.filter((movie) =>
       movie.genre_ids?.some((genreId) => selectedGenreSet.has(genreId))
     )
-  }, [favoriteMovies, mediaFilter, selectedGenreIds, selectedGenreSet])
+  }, [favoriteMovies, selectedGenreIds, selectedGenreSet])
 
   const filteredRecentlyWatchedMovies = useMemo(() => {
-    const typeFilteredMovies = recentlyWatchedMovies.filter((movie) => movie.media_type === mediaFilter)
-
     if (selectedGenreIds.length === 0) {
-      return typeFilteredMovies
+      return recentlyWatchedMovies
     }
 
-    return typeFilteredMovies.filter((movie) =>
+    return recentlyWatchedMovies.filter((movie) =>
       movie.genre_ids?.some((genreId) => selectedGenreSet.has(genreId))
     )
-  }, [mediaFilter, recentlyWatchedMovies, selectedGenreIds, selectedGenreSet])
+  }, [recentlyWatchedMovies, selectedGenreIds, selectedGenreSet])
 
   const favoriteMovieIds = useMemo(
     () => favoriteMovies.map((movie) => movie.id),

@@ -60,38 +60,38 @@ export const getStreamingUrl = (item, provider = 'akcloud') => {
   }
 
   if (provider === 'akcloud') {
-    return `https://vidsrc.xyz/embed/movie?tmdb=${item.id}`
+    return `https://vsembed.ru/embed/movie?tmdb=${item.id}`
   }
 
-  return `https://moviesapi.club/movie/${item.id}`
+  return `https://moviesapi.to/movie/${item.id}`
 }
 
 export const getTvEpisodeStreamingUrl = (showId, seasonNumber, episodeNumber, provider = 'akcloud') => {
   if (!showId || !seasonNumber || !episodeNumber) return ''
 
   if (provider === 'akcloud') {
-    return `https://vidsrc.xyz/embed/tv?tmdb=${showId}&season=${seasonNumber}&episode=${episodeNumber}`
+    return `https://vsembed.ru/embed/tv?tmdb=${showId}&season=${seasonNumber}&episode=${episodeNumber}`
   }
 
-  return `https://moviesapi.club/tv/${showId}-${seasonNumber}-${episodeNumber}`
+  return `https://moviesapi.to/tv/${showId}-${seasonNumber}-${episodeNumber}`
 }
 
 export const getStreamingProviders = () => [
   {
     id: 'akcloud',
     name: 'AK Cloud',
-    movieUrl: (id) => `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
-    tvEpisodeUrl: (id, season, episode) => `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-    movieEmbed: (id) => `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
-    movieDetail: (id) => `https://vidsrc.xyz/embed/movie?tmdb=${id}`
+    movieUrl: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`,
+    tvEpisodeUrl: (id, season, episode) => `https://vsembed.ru/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+    movieEmbed: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`,
+    movieDetail: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`
   },
   {
     id: 'megacloud',
     name: 'MEGA Cloud',
-    movieUrl: (id) => `https://moviesapi.club/movie/${id}`,
-    tvEpisodeUrl: (id, season, episode) => `https://moviesapi.club/tv/${id}-${season}-${episode}`,
-    movieEmbed: (id) => `https://moviesapi.club/movie/${id}`,
-    movieDetail: (id) => `https://moviesapi.club/movie/${id}`
+    movieUrl: (id) => `https://moviesapi.to/movie/${id}`,
+    tvEpisodeUrl: (id, season, episode) => `https://moviesapi.to/tv/${id}-${season}-${episode}`,
+    movieEmbed: (id) => `https://moviesapi.to/movie/${id}`,
+    movieDetail: (id) => `https://moviesapi.to/movie/${id}`
   }
 ]
 
