@@ -5,7 +5,7 @@ import Search from './components/Search.jsx'
 import Spinner from './components/Spinner.jsx'
 import MovieCard from './components/MovieCard.jsx'
 import MovieModal from './components/MovieModal.jsx'
-import AuthModal from './components/AuthModal.jsx'
+import { AuthPage } from './components/AuthModal.jsx'
 import { supabase } from './supabaseClient.js'
 import {
   getDetailPath,
@@ -72,6 +72,7 @@ const upsertRuntime = (items, runtimeMap) =>
   }))
 
 const getRuntimeKey = (item) => `${item.media_type || 'movie'}-${item.id}`
+const getMediaItemKey = (item) => `${item.media_type || 'movie'}-${item.id}`
 
 const getSectionMediaTypes = (mediaFilter) => {
   if (mediaFilter === 'movie') return ['movie']
@@ -292,11 +293,24 @@ const AppShell = ({ children }) => (
   </main>
 )
 
+const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorMessage }) => (
+  <AppShell>
+    <div className="wrapper">
+      <AuthPage
+        mode={mode}
+        onModeChange={onModeChange}
+        onSubmit={onSubmit}
+        isSubmitting={isSubmitting}
+        errorMessage={errorMessage}
+      />
+    </div>
+  </AppShell>
+)
+
 const BrowsePage = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const backgroundLocation = location.state?.backgroundLocation
-  const routeLocation = backgroundLocation || location
   const detailMatch = location.pathname.match(/^\/title\/(movie|tv)\/(\d+)$/)
   const authMatch = location.pathname.match(/^\/account\/(login|signup)$/)
   const activeDetailMediaType = detailMatch?.[1] || null
@@ -362,7 +376,7 @@ const BrowsePage = () => {
   }, [recentlyWatchedMovies, selectedGenreIds, selectedGenreSet])
 
   const favoriteMovieIds = useMemo(
-    () => favoriteMovies.map((movie) => movie.id),
+    () => favoriteMovies.map((movie) => getMediaItemKey(movie)),
     [favoriteMovies]
   )
 
@@ -578,21 +592,22 @@ const BrowsePage = () => {
   const toggleFavoriteMovie = async (movie) => {
     if (!isAuthenticated) {
       setAuthErrorMessage('')
-      navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+      navigate('/account/login')
       return
     }
 
-    const isFavorite = favoriteMovieIds.includes(movie.id)
+    const movieKey = getMediaItemKey(movie)
+    const isFavorite = favoriteMovieIds.includes(movieKey)
     const movieData = {
       ...movie,
       runtime: movie.runtime ?? movieRuntimeMap[getRuntimeKey(movie)] ?? null
     }
 
     if (isFavorite) {
-      setFavoriteMovies((currentMovies) => currentMovies.filter((entry) => entry.id !== movie.id))
+      setFavoriteMovies((currentMovies) => currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey))
     } else {
       setFavoriteMovies((currentMovies) => {
-        const withoutMovie = currentMovies.filter((entry) => entry.id !== movie.id)
+        const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
         return [movieData, ...withoutMovie]
       })
 
@@ -606,11 +621,11 @@ const BrowsePage = () => {
 
       setFavoriteMovies((currentMovies) => {
         if (isFavorite) {
-          const withoutMovie = currentMovies.filter((entry) => entry.id !== movie.id)
+          const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
           return [movieData, ...withoutMovie]
         }
 
-        return currentMovies.filter((entry) => entry.id !== movie.id)
+        return currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
       })
     }
   }
@@ -623,7 +638,8 @@ const BrowsePage = () => {
 
       setRecentlyWatchedMovies((currentMovies) => {
         const normalizedMovie = normalizeMediaItem(movie, movie.media_type || 'movie')
-        const withoutMovie = currentMovies.filter((entry) => entry.id !== normalizedMovie.id)
+        const normalizedMovieKey = getMediaItemKey(normalizedMovie)
+        const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== normalizedMovieKey)
         return [normalizedMovie, ...withoutMovie].slice(0, 12)
       })
     }
@@ -632,17 +648,6 @@ const BrowsePage = () => {
   }
 
   const closeTitleDetails = () => {
-    if (location.state?.backgroundLocation) {
-      navigate(-1)
-      return
-    }
-
-    navigate('/')
-  }
-
-  const closeAuthModal = () => {
-    setAuthErrorMessage('')
-
     if (location.state?.backgroundLocation) {
       navigate(-1)
       return
@@ -863,7 +868,7 @@ const BrowsePage = () => {
         : await authApi.login(payload)
 
       setAuthUser(data?.user || null)
-      closeAuthModal()
+      navigate('/')
       return true
     } catch (error) {
       setAuthErrorMessage(error.message)
@@ -888,7 +893,7 @@ const BrowsePage = () => {
   const handleDeletionRequest = () => {
     if (!isAuthenticated) {
       setAuthErrorMessage('Please log in to request account data deletion.')
-      navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+      navigate('/account/login')
       return
     }
 
@@ -924,7 +929,7 @@ const BrowsePage = () => {
         className="locked-collection-action"
         onClick={() => {
           setAuthErrorMessage('')
-          navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+          navigate('/account/login')
         }}
       >
         Log in to unlock
@@ -966,6 +971,21 @@ const BrowsePage = () => {
       </button>
     </div>
   )
+
+  if (isAuthRouteOpen) {
+    return (
+      <AccountAccessRoute
+        mode={authMode}
+        onModeChange={(nextMode) => {
+          setAuthErrorMessage('')
+          navigate(`/account/${nextMode}`, { replace: true })
+        }}
+        onSubmit={handleAuthSubmit}
+        isSubmitting={isAuthSubmitting}
+        errorMessage={authErrorMessage}
+      />
+    )
+  }
 
   return (
     <AppShell>
@@ -1071,7 +1091,7 @@ const BrowsePage = () => {
                     className="account-toolbar-button"
                     onClick={() => {
                       setAuthErrorMessage('')
-                      navigate('/account/login', { state: { backgroundLocation: routeLocation } })
+                      navigate('/account/login')
                     }}
                   >
                     Log in / Sign up
@@ -1187,7 +1207,7 @@ const BrowsePage = () => {
                         movie={movie}
                         onWatchTrailer={openTitleDetails}
                         onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite={favoriteMovieIds.includes(movie.id)}
+                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
                         compact
                       />
                     ))}
@@ -1230,7 +1250,7 @@ const BrowsePage = () => {
                           movie={movie}
                           onWatchTrailer={openTitleDetails}
                           onToggleFavorite={toggleFavoriteMovie}
-                          isFavorite={favoriteMovieIds.includes(movie.id)}
+                          isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
                           compact
                         />
                       ))}
@@ -1290,7 +1310,7 @@ const BrowsePage = () => {
                         movie={movie}
                         onWatchTrailer={openTitleDetails}
                         onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite={favoriteMovieIds.includes(movie.id)}
+                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
                         compact
                       />
                     ))}
@@ -1310,7 +1330,7 @@ const BrowsePage = () => {
                   <div className="trending-showcase-meta">
                     <p className="trending-showcase-copy">
                       {selectedGenreIds.length > 0
-                        ? 'Saved titles filtered by your selected genres.'
+                        ? 'Saved movies and shows filtered by your selected genres.'
                         : 'Keep your go-to picks close for later.'}
                     </p>
                     <div className="trending-showcase-controls" aria-label="Scroll favorite titles">
@@ -1350,7 +1370,7 @@ const BrowsePage = () => {
                 ) : (
                   <p className="trending-showcase-empty">
                     {selectedGenreIds.length > 0
-                      ? 'No saved titles match the current genre filter.'
+                      ? 'No saved movies or shows match the current genre filter.'
                       : 'Save titles with the heart button to build your own watchlist.'}
                   </p>
                 )}
@@ -1392,7 +1412,7 @@ const BrowsePage = () => {
                         movie={movie}
                         onWatchTrailer={openTitleDetails}
                         onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite={favoriteMovieIds.includes(movie.id)}
+                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
                         isFavoriteLocked={!isAuthenticated}
                       />
                     ))}
@@ -1434,7 +1454,7 @@ const BrowsePage = () => {
                       movie={movie}
                       onWatchTrailer={openTitleDetails}
                       onToggleFavorite={toggleFavoriteMovie}
-                      isFavorite={favoriteMovieIds.includes(movie.id)}
+                      isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
                       compact
                     />
                   ))}
@@ -1455,7 +1475,7 @@ const BrowsePage = () => {
 
                 <p className="trending-showcase-copy">
                   {selectedGenreIds.length > 0
-                    ? 'Saved titles filtered by your selected genres.'
+                    ? 'Saved movies and shows filtered by your selected genres.'
                     : 'Keep your go-to picks close for later.'}
                 </p>
               </div>
@@ -1486,7 +1506,7 @@ const BrowsePage = () => {
               ) : (
                 <p className="trending-showcase-empty desktop-favorites-empty">
                   {selectedGenreIds.length > 0
-                    ? 'No saved titles match the current genre filter.'
+                    ? 'No saved movies or shows match the current genre filter.'
                     : 'Save titles with the heart button to build your own watchlist.'}
                 </p>
               )}
@@ -1532,19 +1552,6 @@ const BrowsePage = () => {
         />
       )}
 
-      {isAuthRouteOpen && (
-        <AuthModal
-          mode={authMode}
-          onClose={closeAuthModal}
-          onModeChange={(nextMode) => {
-            setAuthErrorMessage('')
-            navigate(`/account/${nextMode}`, { state: { backgroundLocation: routeLocation }, replace: true })
-          }}
-          onSubmit={handleAuthSubmit}
-          isSubmitting={isAuthSubmitting}
-          errorMessage={authErrorMessage}
-        />
-      )}
     </AppShell>
   )
 }

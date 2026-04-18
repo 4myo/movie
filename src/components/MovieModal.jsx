@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import MovieCard from './MovieCard.jsx'
 import { getMediaLabel, getMediaPluralLabel, getStreamingProviders } from '../utils/media.js'
 
+const getMediaItemKey = (item) => `${item?.media_type || 'movie'}-${item?.id ?? ''}`
+
 const MovieModal = ({
   movie,
   trailerUrl,
@@ -56,7 +58,7 @@ const MovieModal = ({
   useEffect(() => {
     setViewMode('trailer')
     setSelectedProvider('akcloud')
-  }, [movie?.id])
+  }, [movie?.id, movie?.media_type])
 
   const currentStreamUrl = useMemo(() => {
     if (!movie?.id || viewMode !== 'stream') return ''
@@ -279,11 +281,11 @@ const MovieModal = ({
                   <div className="movie-modal-similar-row">
                     {similarMovies.map((similarMovie) => (
                       <MovieCard
-                        key={`similar-${similarMovie.id}`}
+                        key={`similar-${similarMovie.media_type || 'movie'}-${similarMovie.id}`}
                         movie={similarMovie}
                         onWatchTrailer={onWatchTrailer}
                         onToggleFavorite={onToggleFavorite}
-                        isFavorite={favoriteMovieIds.includes(similarMovie.id)}
+                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(similarMovie))}
                         compact
                       />
                     ))}

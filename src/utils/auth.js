@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient.js'
 
 const FAVORITES_TABLE = 'favorite_movies'
 const RECENTLY_WATCHED_TABLE = 'recently_watched'
+const getStoredMediaType = (movie) => movie?.media_type || 'movie'
 
 export const authApi = {
   me: async () => {
@@ -94,11 +95,14 @@ export const authApi = {
   },
 
   toggleFavorite: async (userId, movie) => {
+    const mediaType = getStoredMediaType(movie)
+
     const { data: existing, error: existingError } = await supabase
       .from(FAVORITES_TABLE)
       .select('id')
       .eq('user_id', userId)
       .eq('movie_id', movie.id)
+      .eq('media_type', mediaType)
       .maybeSingle()
 
     if (existingError) {
@@ -120,12 +124,12 @@ export const authApi = {
 
     const { error } = await supabase
       .from(FAVORITES_TABLE)
-      .insert({
-        user_id: userId,
-        movie_id: movie.id,
-        media_type: movie.media_type || 'movie',
-        movie_data: movie
-      })
+        .insert({
+          user_id: userId,
+          movie_id: movie.id,
+          media_type: mediaType,
+          movie_data: movie
+        })
 
     if (error) {
       throw new Error(error.message)
@@ -150,15 +154,37 @@ export const authApi = {
   },
 
   trackRecentlyWatched: async (userId, movie) => {
-    const { error } = await supabase
+    const mediaType = getStoredMediaType(movie)
+    const { data: existing, error: existingError } = await supabase
       .from(RECENTLY_WATCHED_TABLE)
-      .upsert({
-        user_id: userId,
-        movie_id: movie.id,
-        media_type: movie.media_type || 'movie',
-        movie_data: movie,
-        watched_at: new Date().toISOString()
-      }, { onConflict: 'user_id,movie_id' })
+      .select('id')
+      .eq('user_id', userId)
+      .eq('movie_id', movie.id)
+      .eq('media_type', mediaType)
+      .maybeSingle()
+
+    if (existingError) {
+      throw new Error(existingError.message)
+    }
+
+    const payload = {
+      movie_data: movie,
+      watched_at: new Date().toISOString()
+    }
+
+    const { error } = existing
+      ? await supabase
+          .from(RECENTLY_WATCHED_TABLE)
+          .update(payload)
+          .eq('id', existing.id)
+      : await supabase
+          .from(RECENTLY_WATCHED_TABLE)
+          .insert({
+            user_id: userId,
+            movie_id: movie.id,
+            media_type: mediaType,
+            ...payload
+          })
 
     if (error) {
       throw new Error(error.message)
