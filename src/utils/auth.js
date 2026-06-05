@@ -2,7 +2,44 @@ import { supabase } from '../supabaseClient.js'
 
 const FAVORITES_TABLE = 'favorite_movies'
 const RECENTLY_WATCHED_TABLE = 'recently_watched'
-const getStoredMediaType = (movie) => movie?.media_type || 'movie'
+const getStoredMediaType = (movie) => (movie?.media_type === 'tv' ? 'tv' : 'movie')
+const getStoredMovieId = (movie) => {
+  const movieId = Number(movie?.id)
+
+  if (!Number.isSafeInteger(movieId) || movieId <= 0) {
+    throw new Error('Invalid title id')
+  }
+
+  return movieId
+}
+const normalizeEmail = (email = '') => email.trim().toLowerCase()
+const sanitizeDisplayName = (name = '') => name.trim().replace(/\s+/g, ' ').slice(0, 80)
+
+const requireVerifiedUser = async (expectedUserId) => {
+  const { data, error } = await supabase.auth.getUser()
+
+  if (error || !data?.user?.id) {
+    throw new Error(error?.message || 'You must be logged in')
+  }
+
+  if (expectedUserId && data.user.id !== expectedUserId) {
+    throw new Error('Session user mismatch. Please log in again.')
+  }
+
+  return data.user
+}
+
+const clearLocalSessionArtifacts = () => {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.sessionStorage.removeItem('movie-browser-auth-v2')
+    window.localStorage.removeItem('movie-browser-auth')
+    window.localStorage.removeItem('movie-browser-auth-v2')
+  } catch {
+    // Storage can be unavailable in privacy modes; Supabase signOut still invalidates the session.
+  }
+}
 
 export const authApi = {
   me: async () => {
@@ -16,12 +53,14 @@ export const authApi = {
   },
 
   signup: async ({ name, email, password }) => {
+    const safeName = sanitizeDisplayName(name)
+    const safeEmail = normalizeEmail(email)
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: safeEmail,
       password,
       options: {
         data: {
-          name
+          name: safeName
         }
       }
     })
@@ -34,13 +73,17 @@ export const authApi = {
   },
 
   login: async ({ email, password }) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: normalizeEmail(email),
+      password
+    })
 
     if (error) {
       throw new Error(error.message)
     }
 
-    return { user: data.user }
+    const verifiedUser = await requireVerifiedUser(data.user?.id)
+    return { user: verifiedUser }
   },
 
   logout: async () => {
@@ -50,10 +93,13 @@ export const authApi = {
       throw new Error(error.message)
     }
 
+    clearLocalSessionArtifacts()
     return { success: true }
   },
 
   deleteAccount: async () => {
+    await requireVerifiedUser()
+
     const {
       data: { session },
       error: sessionError
@@ -81,10 +127,11 @@ export const authApi = {
   },
 
   getFavorites: async (userId) => {
+    const verifiedUser = await requireVerifiedUser(userId)
     const { data, error } = await supabase
       .from(FAVORITES_TABLE)
       .select('movie_data')
-      .eq('user_id', userId)
+      .eq('user_id', verifiedUser.id)
       .order('updated_at', { ascending: false })
 
     if (error) {
@@ -95,13 +142,15 @@ export const authApi = {
   },
 
   toggleFavorite: async (userId, movie) => {
+    const verifiedUser = await requireVerifiedUser(userId)
     const mediaType = getStoredMediaType(movie)
+    const movieId = getStoredMovieId(movie)
 
     const { data: existing, error: existingError } = await supabase
       .from(FAVORITES_TABLE)
       .select('id')
-      .eq('user_id', userId)
-      .eq('movie_id', movie.id)
+      .eq('user_id', verifiedUser.id)
+      .eq('movie_id', movieId)
       .eq('media_type', mediaType)
       .maybeSingle()
 
@@ -125,8 +174,8 @@ export const authApi = {
     const { error } = await supabase
       .from(FAVORITES_TABLE)
         .insert({
-          user_id: userId,
-          movie_id: movie.id,
+          user_id: verifiedUser.id,
+          movie_id: movieId,
           media_type: mediaType,
           movie_data: movie
         })
@@ -139,10 +188,11 @@ export const authApi = {
   },
 
   getRecentlyWatched: async (userId) => {
+    const verifiedUser = await requireVerifiedUser(userId)
     const { data, error } = await supabase
       .from(RECENTLY_WATCHED_TABLE)
-      .select('movie_data')
-      .eq('user_id', userId)
+      .select('movie_data, watched_at')
+      .eq('user_id', verifiedUser.id)
       .order('watched_at', { ascending: false })
       .limit(12)
 
@@ -150,16 +200,23 @@ export const authApi = {
       throw new Error(error.message)
     }
 
-    return { items: (data || []).map((entry) => entry.movie_data) }
+    return {
+      items: (data || []).map((entry) => ({
+        ...entry.movie_data,
+        watched_at: entry.movie_data?.watched_at || entry.watched_at
+      }))
+    }
   },
 
-  trackRecentlyWatched: async (userId, movie) => {
+  trackRecentlyWatched: async (userId, movie, progress = {}) => {
+    const verifiedUser = await requireVerifiedUser(userId)
     const mediaType = getStoredMediaType(movie)
+    const movieId = getStoredMovieId(movie)
     const { data: existing, error: existingError } = await supabase
       .from(RECENTLY_WATCHED_TABLE)
       .select('id')
-      .eq('user_id', userId)
-      .eq('movie_id', movie.id)
+      .eq('user_id', verifiedUser.id)
+      .eq('movie_id', movieId)
       .eq('media_type', mediaType)
       .maybeSingle()
 
@@ -167,9 +224,15 @@ export const authApi = {
       throw new Error(existingError.message)
     }
 
+    const watchedAt = new Date().toISOString()
+    const movieData = {
+      ...movie,
+      ...progress,
+      watched_at: watchedAt
+    }
     const payload = {
-      movie_data: movie,
-      watched_at: new Date().toISOString()
+      movie_data: movieData,
+      watched_at: watchedAt
     }
 
     const { error } = existing
@@ -180,11 +243,43 @@ export const authApi = {
       : await supabase
           .from(RECENTLY_WATCHED_TABLE)
           .insert({
-            user_id: userId,
-            movie_id: movie.id,
+            user_id: verifiedUser.id,
+            movie_id: movieId,
             media_type: mediaType,
             ...payload
           })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return { success: true }
+  },
+
+  removeRecentlyWatched: async (userId, movie) => {
+    const verifiedUser = await requireVerifiedUser(userId)
+    const mediaType = getStoredMediaType(movie)
+    const movieId = getStoredMovieId(movie)
+    const { error } = await supabase
+      .from(RECENTLY_WATCHED_TABLE)
+      .delete()
+      .eq('user_id', verifiedUser.id)
+      .eq('movie_id', movieId)
+      .eq('media_type', mediaType)
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return { success: true }
+  },
+
+  clearRecentlyWatched: async (userId) => {
+    const verifiedUser = await requireVerifiedUser(userId)
+    const { error } = await supabase
+      .from(RECENTLY_WATCHED_TABLE)
+      .delete()
+      .eq('user_id', verifiedUser.id)
 
     if (error) {
       throw new Error(error.message)

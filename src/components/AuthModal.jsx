@@ -3,10 +3,20 @@ import React, { useMemo, useState } from 'react'
 const initialFormState = {
   name: '',
   email: '',
-  password: ''
+  password: '',
+  company: ''
 }
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+const normalizeEmail = (value) => value.trim().toLowerCase()
+const normalizeName = (value) => value.trim().replace(/\s+/g, ' ')
+
+const getPasswordChecks = (password) => ({
+  length: password.length >= 10 && password.length <= 128,
+  letter: /[A-Za-z]/.test(password),
+  number: /\d/.test(password),
+  symbol: /[^A-Za-z0-9]/.test(password)
+})
 
 const AuthForm = ({
   mode = 'login',
@@ -17,18 +27,12 @@ const AuthForm = ({
 }) => {
   const [formState, setFormState] = useState(initialFormState)
   const [validationMessage, setValidationMessage] = useState('')
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false)
 
-  const title = useMemo(
-    () => (mode === 'signup' ? 'Create your account' : 'Welcome back'),
-    [mode]
-  )
-
-  const copy = useMemo(
-    () => (mode === 'signup'
-      ? 'Create an account to sync favorites and recently watched titles across visits while guest browsing stays open to everyone.'
-      : 'Log in to restore your favorites and recently watched titles. You can still browse the catalog without an account.'),
-    [mode]
-  )
+  const isSignup = mode === 'signup'
+  const passwordChecks = useMemo(() => getPasswordChecks(formState.password), [formState.password])
+  const passedPasswordChecks = Object.values(passwordChecks).filter(Boolean).length
+  const title = isSignup ? 'Sign up' : 'Log in'
 
   const handleChange = (event) => {
     const { name, value } = event.target
@@ -41,29 +45,34 @@ const AuthForm = ({
   const handleSubmit = async (event) => {
     event.preventDefault()
 
+    if (formState.company.trim()) {
+      setValidationMessage('Unable to submit this request.')
+      return
+    }
+
     const payload = {
-      name: formState.name.trim(),
-      email: formState.email.trim(),
+      name: normalizeName(formState.name),
+      email: normalizeEmail(formState.email),
       password: formState.password
     }
 
-    if (mode === 'signup' && (payload.name.length < 2 || payload.name.length > 80)) {
-      setValidationMessage('Name must be between 2 and 80 characters')
+    if (isSignup && (payload.name.length < 2 || payload.name.length > 80)) {
+      setValidationMessage('Name must be between 2 and 80 characters.')
       return
     }
 
     if (!isValidEmail(payload.email)) {
-      setValidationMessage('Enter a valid email address')
+      setValidationMessage('Enter a valid email address.')
       return
     }
 
     if (payload.password.length < 8 || payload.password.length > 128) {
-      setValidationMessage('Password must be between 8 and 128 characters')
+      setValidationMessage('Password must be between 8 and 128 characters.')
       return
     }
 
-    if (!/[A-Za-z]/.test(payload.password) || !/\d/.test(payload.password)) {
-      setValidationMessage('Password must include at least one letter and one number')
+    if (isSignup && passedPasswordChecks < 3) {
+      setValidationMessage('Use a stronger password before creating the account.')
       return
     }
 
@@ -73,58 +82,69 @@ const AuthForm = ({
 
     if (isSuccessful) {
       setFormState(initialFormState)
+      setIsPasswordVisible(false)
     }
   }
 
   const switchMode = (nextMode) => {
     setFormState(initialFormState)
     setValidationMessage('')
+    setIsPasswordVisible(false)
     onModeChange?.(nextMode)
   }
 
   return (
-    <>
-      <div className="auth-modal-header">
-        <div>
-          <p className="auth-modal-kicker">Account access</p>
-          <h2 className="auth-modal-title">{title}</h2>
-          <p className="auth-modal-copy">{copy}</p>
-        </div>
+    <section className="auth-card" aria-labelledby="auth-title">
+      <div className="auth-card-header">
+        <h2 id="auth-title">{title}</h2>
       </div>
 
-      <div className="auth-modal-tabs">
+      <div className="auth-mode-switch" aria-label="Choose account mode">
         <button
           type="button"
-          className={`auth-modal-tab ${mode === 'login' ? 'is-active' : ''}`}
+          className={mode === 'login' ? 'is-active' : ''}
           onClick={() => switchMode('login')}
         >
           Log in
         </button>
         <button
           type="button"
-          className={`auth-modal-tab ${mode === 'signup' ? 'is-active' : ''}`}
+          className={mode === 'signup' ? 'is-active' : ''}
           onClick={() => switchMode('signup')}
         >
           Sign up
         </button>
       </div>
 
-      <form className="auth-modal-form" onSubmit={handleSubmit}>
-        {mode === 'signup' && (
-          <label className="auth-modal-field">
+      <form className="auth-form" onSubmit={handleSubmit} noValidate>
+        <input
+          className="auth-honeypot"
+          type="text"
+          name="company"
+          value={formState.company}
+          onChange={handleChange}
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+        />
+
+        {isSignup && (
+          <label className="auth-field">
             <span>Name</span>
             <input
               type="text"
               name="name"
               value={formState.name}
               onChange={handleChange}
-              placeholder="Your display name"
+              placeholder="Display name"
               autoComplete="name"
+              maxLength={80}
+              required
             />
           </label>
         )}
 
-        <label className="auth-modal-field">
+        <label className="auth-field">
           <span>Email</span>
           <input
             type="email"
@@ -133,31 +153,57 @@ const AuthForm = ({
             onChange={handleChange}
             placeholder="you@example.com"
             autoComplete="email"
+            inputMode="email"
             required
           />
         </label>
 
-        <label className="auth-modal-field">
+        <label className="auth-field">
           <span>Password</span>
-          <input
-            type="password"
-            name="password"
-            value={formState.password}
-            onChange={handleChange}
-            placeholder="Minimum 8 characters"
-            autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-            minLength={8}
-            required
-          />
+          <div className="auth-password-shell">
+            <input
+              type={isPasswordVisible ? 'text' : 'password'}
+              name="password"
+              value={formState.password}
+              onChange={handleChange}
+              placeholder={isSignup ? '10+ characters' : 'Your password'}
+              autoComplete={isSignup ? 'new-password' : 'current-password'}
+              minLength={8}
+              maxLength={128}
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setIsPasswordVisible((visible) => !visible)}
+              aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
+            >
+              {isPasswordVisible ? 'Hide' : 'Show'}
+            </button>
+          </div>
         </label>
 
-        {(validationMessage || errorMessage) && <p className="auth-modal-error">{validationMessage || errorMessage}</p>}
+        {isSignup && (
+          <div className="auth-password-meter" aria-label={`${passedPasswordChecks} of 4 password checks passed`}>
+            <div className="auth-password-bars" aria-hidden="true">
+              {Object.entries(passwordChecks).map(([key, isPassed]) => (
+                <span key={key} className={isPassed ? 'is-passed' : ''} />
+              ))}
+            </div>
+          </div>
+        )}
 
-        <button type="submit" className="auth-modal-submit" disabled={isSubmitting}>
-          {isSubmitting ? 'Please wait...' : mode === 'signup' ? 'Create account' : 'Log in'}
+        {(validationMessage || errorMessage) && (
+          <p className="auth-error" role="alert">
+            {validationMessage || errorMessage}
+          </p>
+        )}
+
+        <button type="submit" className="auth-submit" disabled={isSubmitting}>
+          {isSubmitting ? 'Checking...' : isSignup ? 'Create account' : 'Log in'}
         </button>
       </form>
-    </>
+
+    </section>
   )
 }
 
@@ -169,29 +215,16 @@ export const AuthPage = ({
   errorMessage = ''
 }) => (
   <div className="auth-page-shell">
-    <div className="auth-page-grid">
-      <section className="auth-page-panel auth-page-copy-panel">
-        <p className="auth-page-kicker">Personal memory only</p>
-        <h1 className="auth-page-title">Keep favorites and watch history synced without blocking guest browsing.</h1>
-        <p className="auth-page-copy">
-          Browse movies and TV shows freely without an account. Sign in only if you want your favorites and recently watched titles to persist across sessions and devices.
-        </p>
-        <div className="auth-page-benefits">
-          <p>Save favorites and watchlist picks.</p>
-          <p>Continue recently watched titles later.</p>
-          <p>Leave the main catalog fully open to guests.</p>
-        </div>
-      </section>
+    <div className="auth-ambient" aria-hidden="true" />
 
-      <section className="auth-page-panel auth-page-form-panel">
-        <AuthForm
-          mode={mode}
-          onModeChange={onModeChange}
-          onSubmit={onSubmit}
-          isSubmitting={isSubmitting}
-          errorMessage={errorMessage}
-        />
-      </section>
+    <div className="auth-layout">
+      <AuthForm
+        mode={mode}
+        onModeChange={onModeChange}
+        onSubmit={onSubmit}
+        isSubmitting={isSubmitting}
+        errorMessage={errorMessage}
+      />
     </div>
   </div>
 )

@@ -52,6 +52,8 @@ export const getTrailerEmbedUrl = (videoKey) =>
     ? `https://www.youtube-nocookie.com/embed/${videoKey}?rel=0&modestbranding=1&playsinline=1`
     : ''
 
+export const DEFAULT_STREAMING_PROVIDER_ID = 'akcloud'
+
 export const getStreamingUrl = (item, provider = 'akcloud') => {
   if (!item?.id) return ''
 
@@ -80,7 +82,7 @@ export const getStreamingProviders = () => [
   {
     id: '111movies',
     name: '111movies',
-    label: '111movies — Default • Ads free',
+    label: '111movies — Ads free',
     movieUrl: (id) => `https://111movies.com/movie/${id}`,
     tvEpisodeUrl: (id, season, episode) => `https://111movies.com/tv/${id}/${season}/${episode}`,
     movieEmbed: (id) => `https://111movies.com/movie/${id}`,
@@ -134,7 +136,7 @@ export const getStreamingProviders = () => [
   {
     id: 'akcloud',
     name: 'AK Cloud',
-    label: 'AK Cloud',
+    label: 'AK Cloud — Default',
     movieUrl: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`,
     tvEpisodeUrl: (id, season, episode) => `https://vsembed.ru/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
     movieEmbed: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`,

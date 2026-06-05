@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDebounce } from 'use-debounce'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Spinner from './components/Spinner.jsx'
@@ -6,6 +6,7 @@ import MovieModal from './components/MovieModal.jsx'
 import { AuthPage } from './components/AuthModal.jsx'
 import { supabase } from './supabaseClient.js'
 import {
+  DEFAULT_STREAMING_PROVIDER_ID,
   getDetailPath,
   getMediaPluralLabel,
   getStreamingUrl,
@@ -82,7 +83,101 @@ const TV_BELT_GENRES = [
   'Western'
 ]
 const MAX_GENRE_ROWS = 32
+const INITIAL_BELT_ITEM_COUNT = 12
+const BELT_ITEM_BATCH_SIZE = 10
 const imageBaseUrl = 'https://image.tmdb.org/t/p/'
+const WATCH_HISTORY_STORAGE_PREFIX = 'movie-browser:watch-history:v1:'
+
+const clampNumber = (value, min = 0, max = Number.POSITIVE_INFINITY) =>
+  Math.min(Math.max(Number.isFinite(value) ? value : min, min), max)
+
+const getResumeTimeSeconds = (item) => clampNumber(Number(item?.resume_time_seconds || 0))
+
+const getProgressPercent = (item) => clampNumber(Number(item?.progress_percent || 0), 0, 100)
+
+const formatResumeTime = (seconds = 0) => {
+  const safeSeconds = Math.floor(clampNumber(Number(seconds || 0)))
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const remainingSeconds = safeSeconds % 60
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`
+  }
+
+  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+}
+
+const getWatchPath = (item, resumeTimeSeconds = 0) => {
+  const mediaType = item?.media_type || 'movie'
+  const basePath = `/watch/${mediaType}/${item.id}`
+  const safeResumeTime = Math.floor(getResumeTimeSeconds({ resume_time_seconds: resumeTimeSeconds }))
+
+  return safeResumeTime > 0 ? `${basePath}?t=${safeResumeTime}` : basePath
+}
+
+const appendPlaybackTimestamp = (url, resumeTimeSeconds = 0) => {
+  const safeResumeTime = Math.floor(getResumeTimeSeconds({ resume_time_seconds: resumeTimeSeconds }))
+  if (!url || safeResumeTime <= 0) return url
+
+  try {
+    const playerUrl = new URL(url)
+    playerUrl.searchParams.set('t', safeResumeTime.toString())
+    playerUrl.searchParams.set('start', safeResumeTime.toString())
+    return playerUrl.toString()
+  } catch {
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}t=${safeResumeTime}&start=${safeResumeTime}`
+  }
+}
+
+const appendUniqueMediaItems = (currentItems, incomingItems) => {
+  const seenKeys = new Set(currentItems.map((item) => getMediaItemKey(item)))
+  const uniqueIncomingItems = incomingItems.filter((item) => {
+    const key = getMediaItemKey(item)
+    if (seenKeys.has(key)) return false
+    seenKeys.add(key)
+    return true
+  })
+
+  return [...currentItems, ...uniqueIncomingItems]
+}
+
+const getLocalWatchHistoryKey = (userId) => `${WATCH_HISTORY_STORAGE_PREFIX}${userId}`
+
+const getLocalWatchHistory = (userId) => {
+  if (!userId || typeof window === 'undefined' || !window.localStorage) return []
+
+  try {
+    const items = JSON.parse(window.localStorage.getItem(getLocalWatchHistoryKey(userId)) || '[]')
+    return Array.isArray(items) ? items : []
+  } catch {
+    return []
+  }
+}
+
+const setLocalWatchHistory = (userId, items) => {
+  if (!userId || typeof window === 'undefined' || !window.localStorage) return
+
+  try {
+    window.localStorage.setItem(getLocalWatchHistoryKey(userId), JSON.stringify(items.slice(0, 12)))
+  } catch {
+    // Local history is a convenience cache; remote Supabase history remains the source of truth.
+  }
+}
+
+const upsertLocalWatchHistoryItem = (userId, movie) => {
+  if (!userId) return []
+
+  const movieKey = getMediaItemKey(movie)
+  const nextItems = [
+    movie,
+    ...getLocalWatchHistory(userId).filter((entry) => getMediaItemKey(entry) !== movieKey)
+  ].slice(0, 12)
+
+  setLocalWatchHistory(userId, nextItems)
+  return nextItems
+}
 
 const getBackdropUrl = (item, size = 'w1280') => {
   if (item?.backdrop_path) return `${imageBaseUrl}${size}${item.backdrop_path}`
@@ -95,7 +190,7 @@ const getPosterUrl = (item, size = 'w500') =>
 
 const getHeroTrailerEmbedUrl = (videoKey) =>
   videoKey
-    ? `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0&loop=1&playlist=${videoKey}&rel=0&modestbranding=1&playsinline=1`
+    ? `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&loop=1&playlist=${videoKey}&rel=0&modestbranding=1&playsinline=1&enablejsapi=1`
     : ''
 
 const shouldPersistCacheKey = (key) => PERSISTENT_CACHE_KEYS.some((prefix) => key.startsWith(prefix))
@@ -227,7 +322,9 @@ const fetchGenreRowBatch = async (rowsToLoad, selectedMediaFilter, startIndex, b
       return {
         id: genre.id,
         title: genre.name,
-        items: normalizeMediaList((data.results || []).slice(0, 14), selectedMediaFilter)
+        items: normalizeMediaList((data.results || []).slice(0, 20), selectedMediaFilter),
+        nextPage: 2,
+        totalPages: Math.min(data.total_pages || 1, 500)
       }
     })
   )
@@ -243,7 +340,7 @@ const getSectionMediaTypes = (mediaFilter) => {
   return ['tv']
 }
 
-const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onClose }) => {
+const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onPlayTitle, onClose }) => {
   const [movie, setMovie] = useState(null)
   const [trailerUrl, setTrailerUrl] = useState('')
   const [streamingUrl, setStreamingUrl] = useState('')
@@ -437,15 +534,15 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
       similarMovies={similarMovies}
       isSimilarLoading={isSimilarLoading}
       onWatchTrailer={onOpenTitle}
-      onPlayTitle={(title) => window.open(`/watch/${title.media_type || 'movie'}/${title.id}`, '_blank', 'noopener,noreferrer')}
+      onPlayTitle={onPlayTitle}
       onToggleFavorite={onToggleFavorite}
       favoriteMovieIds={favoriteMovieIds}
     />
   )
 }
 
-const AppShell = ({ children }) => (
-  <main>
+const AppShell = ({ children, className = '' }) => (
+  <main className={className}>
     <div className="cosmic-background" aria-hidden="true">
       <div className="cosmic-glow cosmic-glow-left" />
       <div className="cosmic-glow cosmic-glow-right" />
@@ -458,8 +555,8 @@ const AppShell = ({ children }) => (
 )
 
 const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorMessage }) => (
-  <AppShell>
-    <div className="wrapper">
+  <AppShell className="auth-main">
+    <div className="wrapper auth-route-wrapper">
       <AuthPage
         mode={mode}
         onModeChange={onModeChange}
@@ -471,19 +568,163 @@ const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorM
   </AppShell>
 )
 
-const WatchRoute = ({ mediaType, id }) => {
+const BeltCard = ({ movie, index = 0, onOpenTitle }) => (
+  <article
+    className="belt-card"
+    onClick={() => onOpenTitle(movie)}
+    onKeyDown={(event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        onOpenTitle(movie)
+      }
+    }}
+    role="button"
+    tabIndex={0}
+    aria-label={`Open ${movie.title}`}
+    style={{ '--card-index': index }}
+  >
+    <div className="belt-card-image-shell">
+      <img
+        className="belt-card-image"
+        src={movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)}
+        alt={movie.title}
+        loading={index < 4 ? 'eager' : 'lazy'}
+        decoding="async"
+        fetchPriority={index < 4 ? 'high' : 'auto'}
+      />
+    </div>
+    <h3 className="belt-card-title">{movie.title}</h3>
+  </article>
+)
+
+const ContentBelt = ({
+  title,
+  items = [],
+  accent = '',
+  onLoadMore,
+  beltKey,
+  onOpenTitle,
+  beltVisibleCounts,
+  setBeltVisibleCounts,
+  loadingMoreBeltKeys,
+  setLoadingMoreBeltKeys,
+  exhaustedBeltKeys,
+  setExhaustedBeltKeys
+}) => {
+  const beltRef = useRef(null)
+  const resolvedBeltKey = beltKey || title
+  const visibleCount = beltVisibleCounts[resolvedBeltKey] || INITIAL_BELT_ITEM_COUNT
+  const isLoadingMore = loadingMoreBeltKeys.includes(resolvedBeltKey)
+  const isExhausted = exhaustedBeltKeys.includes(resolvedBeltKey)
+
+  if (items.length === 0) return null
+
+  const beltItems = items.slice(0, visibleCount)
+  const hasMoreItems = visibleCount < items.length || (Boolean(onLoadMore) && !isExhausted)
+  const scrollBelt = (direction) => {
+    beltRef.current?.scrollBy({
+      left: direction === 'left' ? -Math.max(window.innerWidth * 0.72, 280) : Math.max(window.innerWidth * 0.72, 280),
+      behavior: 'smooth'
+    })
+  }
+  const loadMoreItems = async () => {
+    if (isLoadingMore) return
+
+    const targetCount = visibleCount + BELT_ITEM_BATCH_SIZE
+    const previousScrollLeft = beltRef.current?.scrollLeft ?? 0
+    const restoreThenAdvance = () => {
+      window.requestAnimationFrame(() => {
+        if (beltRef.current) {
+          beltRef.current.scrollLeft = previousScrollLeft
+        }
+
+        window.requestAnimationFrame(() => scrollBelt('right'))
+      })
+    }
+
+    if (targetCount > items.length && onLoadMore) {
+      setLoadingMoreBeltKeys((currentKeys) => [...new Set([...currentKeys, resolvedBeltKey])])
+      const didLoadMore = await onLoadMore()
+      setLoadingMoreBeltKeys((currentKeys) => currentKeys.filter((key) => key !== resolvedBeltKey))
+
+      if (!didLoadMore) {
+        setExhaustedBeltKeys((currentKeys) => [...new Set([...currentKeys, resolvedBeltKey])])
+        setBeltVisibleCounts((currentCounts) => ({
+          ...currentCounts,
+          [resolvedBeltKey]: items.length
+        }))
+        restoreThenAdvance()
+        return
+      }
+    }
+
+    setBeltVisibleCounts((currentCounts) => ({
+      ...currentCounts,
+      [resolvedBeltKey]: targetCount
+    }))
+    restoreThenAdvance()
+  }
+
+  return (
+    <section className="content-belt" aria-labelledby={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>
+      <div className="content-belt-heading">
+        <h2 id={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>{title}</h2>
+        {accent && <span>{accent}</span>}
+        <div className="content-belt-controls">
+          <button type="button" onClick={() => scrollBelt('left')} aria-label={`Scroll ${title} left`}>‹</button>
+          <button type="button" onClick={() => scrollBelt('right')} aria-label={`Scroll ${title} right`}>›</button>
+        </div>
+      </div>
+
+      <div className="content-belt-viewport" ref={beltRef}>
+        <div className="content-belt-track">
+          {beltItems.map((movie, index) => (
+            <BeltCard
+              key={`${title}-${movie.media_type}-${movie.id}`}
+              movie={movie}
+              index={index}
+              onOpenTitle={onOpenTitle}
+            />
+          ))}
+          {hasMoreItems && (
+            <button
+              type="button"
+              className="content-belt-load-more"
+              onClick={loadMoreItems}
+              disabled={isLoadingMore}
+              aria-label={`Load more ${title}`}
+            >
+              <span>{isLoadingMore ? 'Loading...' : 'Load more'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
   const navigate = useNavigate()
+  const watchLocation = useLocation()
   const [movie, setMovie] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [hasLoadError, setHasLoadError] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState('111movies')
+  const [selectedProvider, setSelectedProvider] = useState(DEFAULT_STREAMING_PROVIDER_ID)
   const [seasonOptions, setSeasonOptions] = useState([])
   const [episodeOptions, setEpisodeOptions] = useState([])
   const [selectedSeasonNumber, setSelectedSeasonNumber] = useState(null)
   const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState(null)
   const [isServerMenuOpen, setIsServerMenuOpen] = useState(false)
+  const [watchedSeconds, setWatchedSeconds] = useState(0)
+  const watchStartedAtRef = useRef(Date.now())
+  const latestProgressRef = useRef(null)
+  const lastRemoteProgressSaveRef = useRef(0)
   const providers = useMemo(() => getStreamingProviders(), [])
   const isTvShow = mediaType === 'tv'
+  const initialResumeTimeSeconds = useMemo(() => {
+    const params = new URLSearchParams(watchLocation.search)
+    return getResumeTimeSeconds({ resume_time_seconds: params.get('t') || params.get('start') })
+  }, [watchLocation.search])
 
   useEffect(() => {
     const loadWatchTitle = async () => {
@@ -494,6 +735,9 @@ const WatchRoute = ({ mediaType, id }) => {
       setEpisodeOptions([])
       setSelectedSeasonNumber(null)
       setSelectedEpisodeNumber(null)
+      setWatchedSeconds(initialResumeTimeSeconds)
+      watchStartedAtRef.current = Date.now()
+      lastRemoteProgressSaveRef.current = 0
 
       try {
         const detailEndpoint = isTvShow ? 'tv' : 'movie'
@@ -523,7 +767,7 @@ const WatchRoute = ({ mediaType, id }) => {
     }
 
     loadWatchTitle()
-  }, [id, isTvShow, mediaType])
+  }, [id, initialResumeTimeSeconds, isTvShow, mediaType])
 
   useEffect(() => {
     const loadEpisodes = async () => {
@@ -574,9 +818,83 @@ const WatchRoute = ({ mediaType, id }) => {
     selectedProviderDetails,
     selectedSeasonNumber
   ])
+  const playerUrlWithResume = useMemo(
+    () => appendPlaybackTimestamp(playerUrl, initialResumeTimeSeconds),
+    [initialResumeTimeSeconds, playerUrl]
+  )
+  const selectedEpisodeDetails = isTvShow
+    ? episodeOptions.find((episode) => episode.episode_number === selectedEpisodeNumber)
+    : null
+  const durationSeconds = Math.max(
+    Number(selectedEpisodeDetails?.runtime || 0) * 60,
+    Number(movie?.runtime || 0) * 60,
+    1
+  )
   const backdropUrl = movie?.backdrop_path
     ? `https://image.tmdb.org/t/p/original${movie.backdrop_path}`
     : '/hero-bg.png'
+
+  useEffect(() => {
+    if (!authUser?.id || !movie?.id) return undefined
+
+    const getProgressMovie = ({ updateTimer = true } = {}) => {
+      const elapsedSeconds = Math.floor((Date.now() - watchStartedAtRef.current) / 1000)
+      const resumeTimeSeconds = initialResumeTimeSeconds + Math.max(elapsedSeconds, 0)
+      const progressPercent = durationSeconds > 1
+        ? clampNumber(Math.round((resumeTimeSeconds / durationSeconds) * 100), 0, 99)
+        : 0
+      const progressMovie = {
+        ...movie,
+        resume_time_seconds: resumeTimeSeconds,
+        progress_percent: progressPercent,
+        watch_duration_seconds: durationSeconds
+      }
+
+      latestProgressRef.current = progressMovie
+      if (updateTimer) {
+        setWatchedSeconds(resumeTimeSeconds)
+      }
+      upsertLocalWatchHistoryItem(authUser.id, progressMovie)
+      onWatchProgress?.(progressMovie)
+      return progressMovie
+    }
+
+    const writeProgress = ({ forceRemote = false, updateTimer = true } = {}) => {
+      const progressMovie = getProgressMovie({ updateTimer })
+      const now = Date.now()
+
+      if (!forceRemote && now - lastRemoteProgressSaveRef.current < 10000) return
+
+      lastRemoteProgressSaveRef.current = now
+
+      authApi.trackRecentlyWatched(authUser.id, progressMovie, {
+        resume_time_seconds: progressMovie.resume_time_seconds,
+        progress_percent: progressMovie.progress_percent,
+        watch_duration_seconds: progressMovie.watch_duration_seconds
+      }).catch((error) => {
+        console.log(`Error saving watch progress: ${error}`)
+      })
+    }
+
+    writeProgress({ forceRemote: true })
+    const tickId = window.setInterval(getProgressMovie, 1000)
+    const saveId = window.setInterval(writeProgress, 5000)
+    const writeFinalProgress = () => writeProgress({ forceRemote: true, updateTimer: false })
+    window.addEventListener('beforeunload', writeFinalProgress)
+
+    return () => {
+      window.clearInterval(tickId)
+      window.clearInterval(saveId)
+      window.removeEventListener('beforeunload', writeFinalProgress)
+      writeFinalProgress()
+    }
+  }, [
+    authUser?.id,
+    durationSeconds,
+    initialResumeTimeSeconds,
+    movie,
+    onWatchProgress
+  ])
 
   if (isLoading) {
     return (
@@ -623,13 +941,19 @@ const WatchRoute = ({ mediaType, id }) => {
             <p>Now playing</p>
             <h1>{movie.title}</h1>
           </div>
+          {authUser?.id && (
+            <div className="watch-progress-pill" aria-label={`Watched ${formatResumeTime(watchedSeconds)}`}>
+              <span>Watched</span>
+              <strong>{formatResumeTime(watchedSeconds)}</strong>
+            </div>
+          )}
         </header>
 
         <section className="watch-player-shell" aria-label={`${movie.title} player`}>
-          {playerUrl ? (
+          {playerUrlWithResume ? (
             <iframe
-              key={playerUrl}
-              src={playerUrl}
+              key={playerUrlWithResume}
+              src={playerUrlWithResume}
               title={`${movie.title} player`}
               className="watch-player-frame"
               loading="eager"
@@ -730,10 +1054,16 @@ const BrowsePage = () => {
   const [trendingMovies, setTrendingMovies] = useState([])
   const [topRatedMovies, setTopRatedMovies] = useState([])
   const [genreRows, setGenreRows] = useState([])
+  const [beltPages, setBeltPages] = useState({ popular: 1, topRated: 1, trending: 1 })
+  const [beltVisibleCounts, setBeltVisibleCounts] = useState({})
+  const [loadingMoreBeltKeys, setLoadingMoreBeltKeys] = useState([])
+  const [exhaustedBeltKeys, setExhaustedBeltKeys] = useState([])
   const [heroTitle, setHeroTitle] = useState(null)
   const [heroTrailerUrl, setHeroTrailerUrl] = useState('')
   const [heroIndex, setHeroIndex] = useState(0)
   const [isHeroCollapsed, setIsHeroCollapsed] = useState(false)
+  const [heroVolume, setHeroVolume] = useState(0.25)
+  const [isHeroMuted, setIsHeroMuted] = useState(false)
   const [favoriteMovies, setFavoriteMovies] = useState([])
   const [recentlyWatchedMovies, setRecentlyWatchedMovies] = useState([])
   const [isLoading, setIsLoading] = useState(false)
@@ -762,6 +1092,7 @@ const BrowsePage = () => {
   const topRatedRowRef = useRef(null)
   const favoritesRowRef = useRef(null)
   const _recentlyWatchedRowRef = useRef(null)
+  const heroVideoRef = useRef(null)
 
   const selectedGenreSet = useMemo(() => new Set(selectedGenreIds), [selectedGenreIds])
   const mediaPluralLabel = useMemo(() => getMediaPluralLabel(mediaFilter), [mediaFilter])
@@ -800,6 +1131,45 @@ const BrowsePage = () => {
   const isAuthenticated = Boolean(authUser)
   const authMode = authMatch?.[1] === 'signup' ? 'signup' : 'login'
   const isAuthRouteOpen = Boolean(authMatch)
+  const heroEffectiveVolume = isHeroMuted ? 0 : heroVolume
+
+  const sendHeroVideoCommand = useCallback((command, args = []) => {
+    heroVideoRef.current?.contentWindow?.postMessage(
+      JSON.stringify({
+        event: 'command',
+        func: command,
+        args
+      }),
+      '*'
+    )
+  }, [])
+
+  const syncHeroAudio = useCallback(() => {
+    if (!heroTrailerUrl || !heroVideoRef.current) return
+
+    sendHeroVideoCommand('setVolume', [Math.round(heroVolume * 100)])
+    sendHeroVideoCommand(isHeroMuted || heroVolume <= 0 ? 'mute' : 'unMute')
+    sendHeroVideoCommand('playVideo')
+  }, [heroTrailerUrl, heroVolume, isHeroMuted, sendHeroVideoCommand])
+
+  const toggleHeroAudio = () => {
+    setIsHeroMuted((currentlyMuted) => {
+      const nextMuted = !currentlyMuted
+      sendHeroVideoCommand(nextMuted ? 'mute' : 'unMute')
+      sendHeroVideoCommand('setVolume', [Math.round(heroVolume * 100)])
+      sendHeroVideoCommand('playVideo')
+      return nextMuted
+    })
+  }
+
+  const changeHeroVolume = (event) => {
+    const nextVolume = clampNumber(Number(event.target.value), 0, 1)
+    setHeroVolume(nextVolume)
+    setIsHeroMuted(nextVolume <= 0)
+    sendHeroVideoCommand('setVolume', [Math.round(nextVolume * 100)])
+    sendHeroVideoCommand(nextVolume <= 0 ? 'mute' : 'unMute')
+    sendHeroVideoCommand('playVideo')
+  }
 
   const enrichMoviesWithRuntime = (movies) => upsertRuntime(movies, movieRuntimeMap)
 
@@ -886,6 +1256,7 @@ const BrowsePage = () => {
       const normalizedResults = normalizeMediaList(data.results || [], selectedMediaFilter)
 
       setMovieList(enrichMoviesWithRuntime(normalizedResults))
+      setBeltPages((currentPages) => ({ ...currentPages, popular: page }))
       setTotalPages(Math.min(data.total_pages || 1, 500))
     } catch (error) {
       console.log(`Error fetching titles: ${error}`)
@@ -916,9 +1287,10 @@ const BrowsePage = () => {
         setCacheEntry(cacheKey, data)
       }
 
-      const results = normalizeMediaList((data.results || []).slice(0, 16), selectedMediaFilter)
+      const results = normalizeMediaList((data.results || []).slice(0, 20), selectedMediaFilter)
 
       setTrendingMovies(enrichMoviesWithRuntime(results))
+      setBeltPages((currentPages) => ({ ...currentPages, trending: 1 }))
     } catch (error) {
       console.log(`Error fetching trending titles: ${error}`)
       setTrendingMovies([])
@@ -959,7 +1331,8 @@ const BrowsePage = () => {
         setCacheEntry(cacheKey, data)
       }
 
-      setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 16), selectedMediaFilter)))
+      setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 20), selectedMediaFilter)))
+      setBeltPages((currentPages) => ({ ...currentPages, topRated: 1 }))
     } catch (error) {
       console.log(`Error fetching top rated titles: ${error}`)
       setTopRatedMovies([])
@@ -1018,6 +1391,181 @@ const BrowsePage = () => {
     }
   }
 
+  const fetchTitlePage = async ({
+    page,
+    query = '',
+    genreIds = [],
+    selectedMediaFilter = 'movie',
+    sortBy = 'popularity.desc',
+    extraParams = {}
+  }) => {
+    const normalizedQuery = query.trim()
+    const detailEndpoint = selectedMediaFilter === 'tv' ? 'tv' : 'movie'
+    const params = new URLSearchParams({
+      page: page.toString(),
+      include_adult: 'false',
+      language: 'en-US'
+    })
+    let endpoint = `${API_BASE_URL}/discover/${detailEndpoint}`
+
+    if (normalizedQuery) {
+      params.set('query', normalizedQuery)
+      endpoint = `${API_BASE_URL}/search/${detailEndpoint}`
+    } else {
+      params.set('sort_by', sortBy)
+    }
+
+    Object.entries(extraParams).forEach(([key, value]) => {
+      params.set(key, value)
+    })
+
+    if (genreIds.length > 0 && !normalizedQuery) {
+      params.set('with_genres', genreIds.join(','))
+    }
+
+    const cacheKey = getCacheKey(
+      'titles',
+      `load-more:${selectedMediaFilter}:${normalizedQuery}:${genreIds.join(',')}:${sortBy}:${page}:${params.toString()}`
+    )
+    const data = await fetchJson(
+      cacheKey,
+      async () => {
+        const response = await fetch(`${endpoint}?${params.toString()}`, API_OPTIONS)
+        if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+        return response.json()
+      },
+      PERSISTENT_CACHE_TTL_MS
+    )
+
+    return {
+      items: normalizeMediaList(data.results || [], selectedMediaFilter),
+      totalPages: Math.min(data.total_pages || 1, 500)
+    }
+  }
+
+  const loadMorePopularTitles = async () => {
+    const nextPage = (beltPages.popular || 1) + 1
+    if (nextPage > totalPages) return false
+
+    try {
+      const { items } = await fetchTitlePage({
+        page: nextPage,
+        query: debouncedSearchTerm,
+        genreIds: selectedGenreIds,
+        selectedMediaFilter: mediaFilter
+      })
+
+      if (items.length === 0) return false
+
+      setMovieList((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(items)))
+      setBeltPages((currentPages) => ({ ...currentPages, popular: nextPage }))
+      return true
+    } catch (error) {
+      console.log(`Error loading more popular titles: ${error}`)
+      return false
+    }
+  }
+
+  const loadMoreTopRatedTitles = async () => {
+    const nextPage = (beltPages.topRated || 1) + 1
+
+    try {
+      const { items, totalPages: nextTotalPages } = await fetchTitlePage({
+        page: nextPage,
+        genreIds: selectedGenreIds,
+        selectedMediaFilter: mediaFilter,
+        sortBy: 'vote_average.desc',
+        extraParams: { 'vote_count.gte': '200' }
+      })
+
+      if (items.length === 0 || nextPage > nextTotalPages) return false
+
+      setTopRatedMovies((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(items)))
+      setBeltPages((currentPages) => ({ ...currentPages, topRated: nextPage }))
+      return true
+    } catch (error) {
+      console.log(`Error loading more top rated titles: ${error}`)
+      return false
+    }
+  }
+
+  const loadMoreTrendingTitles = async () => {
+    const nextPage = (beltPages.trending || 1) + 1
+
+    try {
+      const cacheKey = getCacheKey('trending', `${mediaFilter}:week:${nextPage}`)
+      const data = await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/trending/${mediaFilter}/week?page=${nextPage}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        },
+        PERSISTENT_CACHE_TTL_MS
+      )
+      const items = normalizeMediaList(data.results || [], mediaFilter)
+      const matchingItems = selectedGenreIds.length > 0
+        ? items.filter((item) => item.genre_ids?.some((genreId) => selectedGenreIds.includes(genreId)))
+        : items
+
+      if (matchingItems.length === 0 || nextPage > Math.min(data.total_pages || 1, 500)) return false
+
+      setTrendingMovies((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(matchingItems)))
+      setBeltPages((currentPages) => ({ ...currentPages, trending: nextPage }))
+      return true
+    } catch (error) {
+      console.log(`Error loading more trending titles: ${error}`)
+      return false
+    }
+  }
+
+  const loadMoreGenreRow = async (rowId) => {
+    const row = genreRows.find((genreRow) => genreRow.id === rowId)
+    const nextPage = row?.nextPage || 2
+
+    if (!row || nextPage > (row.totalPages || 500)) return false
+
+    try {
+      const params = new URLSearchParams({
+        sort_by: 'popularity.desc',
+        with_genres: row.id.toString(),
+        include_adult: 'false',
+        language: 'en-US',
+        page: nextPage.toString()
+      })
+      const cacheKey = getCacheKey('genre-row', `${mediaFilter}:${row.id}:${params.toString()}`)
+      const data = await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/discover/${mediaFilter}?${params.toString()}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        },
+        PERSISTENT_CACHE_TTL_MS
+      )
+      const nextItems = enrichMoviesWithRuntime(normalizeMediaList(data.results || [], mediaFilter))
+
+      if (nextItems.length === 0) return false
+
+      setGenreRows((currentRows) =>
+        currentRows.map((currentRow) => {
+          if (currentRow.id !== row.id) return currentRow
+
+          return {
+            ...currentRow,
+            items: appendUniqueMediaItems(currentRow.items, nextItems),
+            nextPage: nextPage + 1,
+            totalPages: Math.min(data.total_pages || currentRow.totalPages || 1, 500)
+          }
+        })
+      )
+      return true
+    } catch (error) {
+      console.log(`Error loading more ${row.title} titles: ${error}`)
+      return false
+    }
+  }
+
   const loadFavoriteMovies = async () => {
     if (!isAuthenticated) {
       setFavoriteMovies([])
@@ -1050,11 +1598,16 @@ const BrowsePage = () => {
 
     try {
       const data = await authApi.getRecentlyWatched(authUser.id)
-      const items = (data?.items || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
-      setRecentlyWatchedMovies(enrichMoviesWithRuntime(items))
+      const remoteItems = (data?.items || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
+      const localItems = getLocalWatchHistory(authUser.id).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
+      const mergedItems = appendUniqueMediaItems(localItems, remoteItems)
+        .sort((a, b) => new Date(b.watched_at || 0) - new Date(a.watched_at || 0))
+
+      setRecentlyWatchedMovies(enrichMoviesWithRuntime(mergedItems.slice(0, 12)))
     } catch (error) {
       console.log(`Error loading recently watched titles: ${error}`)
-      setRecentlyWatchedMovies([])
+      const localItems = getLocalWatchHistory(authUser.id).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
+      setRecentlyWatchedMovies(enrichMoviesWithRuntime(localItems))
     } finally {
       setIsRecentlyWatchedLoading(false)
     }
@@ -1116,6 +1669,67 @@ const BrowsePage = () => {
     }
 
     navigate(getDetailPath(movie), { state: { backgroundLocation: location } })
+  }
+
+  const handleWatchProgress = useCallback((movie) => {
+    const normalizedMovie = normalizeMediaItem(movie, movie.media_type || 'movie')
+    const normalizedMovieKey = getMediaItemKey(normalizedMovie)
+
+    setRecentlyWatchedMovies((currentMovies) => {
+      const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== normalizedMovieKey)
+      return [normalizedMovie, ...withoutMovie].slice(0, 12)
+    })
+  }, [])
+
+  const playTitle = (movie, resumeTimeSeconds = 0) => {
+    if (!movie?.id) return
+    navigate(getWatchPath(movie, resumeTimeSeconds))
+  }
+
+  const playHistoryItem = (movie) => {
+    playTitle(movie, getResumeTimeSeconds(movie))
+  }
+
+  const removeHistoryItem = async (movie) => {
+    if (!isAuthenticated) {
+      setAuthErrorMessage('')
+      navigate('/account/login')
+      return
+    }
+
+    setRecentlyWatchedMovies((currentMovies) =>
+      currentMovies.filter((entry) => getMediaItemKey(entry) !== getMediaItemKey(movie))
+    )
+    setLocalWatchHistory(
+      authUser.id,
+      getLocalWatchHistory(authUser.id).filter((entry) => getMediaItemKey(entry) !== getMediaItemKey(movie))
+    )
+
+    try {
+      await authApi.removeRecentlyWatched(authUser.id, movie)
+    } catch (error) {
+      console.log(`Error removing watch history item: ${error}`)
+      loadRecentlyWatched()
+    }
+  }
+
+  const clearWatchHistory = async () => {
+    if (!isAuthenticated) {
+      setAuthErrorMessage('')
+      navigate('/account/login')
+      return
+    }
+
+    const previousItems = recentlyWatchedMovies
+    setRecentlyWatchedMovies([])
+    setLocalWatchHistory(authUser.id, [])
+
+    try {
+      await authApi.clearRecentlyWatched(authUser.id)
+    } catch (error) {
+      console.log(`Error clearing watch history: ${error}`)
+      setRecentlyWatchedMovies(previousItems)
+    }
   }
 
   const closeTitleDetails = () => {
@@ -1227,6 +1841,7 @@ const BrowsePage = () => {
       setTrendingMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
       setTopRatedMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
       setFavoriteMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
+      setRecentlyWatchedMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
     } catch (error) {
       console.log(`Error fetching runtimes: ${error}`)
     }
@@ -1282,6 +1897,12 @@ const BrowsePage = () => {
     loadFavoriteMovies()
     loadRecentlyWatched()
   }, [isAuthenticated])
+
+  useEffect(() => {
+    setBeltVisibleCounts({})
+    setLoadingMoreBeltKeys([])
+    setExhaustedBeltKeys([])
+  }, [debouncedSearchTerm, mediaFilter, selectedGenreIds])
 
   useEffect(() => {
     fetchGenres(mediaFilter)
@@ -1362,6 +1983,18 @@ const BrowsePage = () => {
       isActive = false
     }
   }, [heroIndex, trendingMovies])
+
+  useEffect(() => {
+    if (!heroTrailerUrl || isHeroCollapsed) return undefined
+
+    const syncTimeouts = [120, 650, 1400, 2600].map((delay) =>
+      window.setTimeout(syncHeroAudio, delay)
+    )
+
+    return () => {
+      syncTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId))
+    }
+  }, [heroTrailerUrl, isHeroCollapsed, syncHeroAudio])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -1520,67 +2153,102 @@ const BrowsePage = () => {
     </div>
   )
 
-  const BeltCard = ({ movie, index = 0 }) => (
-    <article
-      className="belt-card"
-      onClick={() => openTitleDetails(movie)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          openTitleDetails(movie)
-        }
-      }}
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${movie.title}`}
-      style={{ '--card-index': index }}
-    >
-      <div className="belt-card-image-shell">
-        <img
-          className="belt-card-image"
-          src={movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)}
-          alt={movie.title}
-          loading="lazy"
-        />
-      </div>
-      <h3 className="belt-card-title">{movie.title}</h3>
-    </article>
-  )
+  const ContinueWatchingSection = () => {
+    const localTime = new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date())
 
-  const ContentBelt = ({ title, items = [], accent = '' }) => {
-    const beltRef = useRef(null)
+    if (!isAuthenticated) {
+      return (
+        <section className="continue-watching-section" aria-labelledby="continue-watching-title">
+          <div className="continue-watching-heading">
+            <h2 id="continue-watching-title">Continue Watching</h2>
+          </div>
+          <div className="continue-watching-info">
+            <span aria-hidden="true">i</span>
+            <p>Log in to save watch history, resume timestamps, and progress across your account.</p>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthErrorMessage('')
+                navigate('/account/login')
+              }}
+            >
+              Log in
+            </button>
+          </div>
+        </section>
+      )
+    }
 
-    if (items.length === 0) return null
-
-    const beltItems = items.slice(0, 12)
-    const scrollBelt = (direction) => {
-      beltRef.current?.scrollBy({
-        left: direction === 'left' ? -Math.max(window.innerWidth * 0.72, 280) : Math.max(window.innerWidth * 0.72, 280),
-        behavior: 'smooth'
-      })
+    if (recentlyWatchedMovies.length === 0) {
+      return (
+        <section className="continue-watching-section" aria-labelledby="continue-watching-title">
+          <div className="continue-watching-heading">
+            <h2 id="continue-watching-title">Continue Watching</h2>
+            <span>Local: {localTime}</span>
+          </div>
+          <div className="continue-watching-empty">
+            Start a movie or TV episode and your account history will appear here.
+          </div>
+        </section>
+      )
     }
 
     return (
-      <section className="content-belt" aria-labelledby={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>
-        <div className="content-belt-heading">
-          <h2 id={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>{title}</h2>
-          {accent && <span>{accent}</span>}
-          <div className="content-belt-controls">
-            <button type="button" onClick={() => scrollBelt('left')} aria-label={`Scroll ${title} left`}>‹</button>
-            <button type="button" onClick={() => scrollBelt('right')} aria-label={`Scroll ${title} right`}>›</button>
-          </div>
+      <section className="continue-watching-section" aria-labelledby="continue-watching-title">
+        <div className="continue-watching-heading">
+          <h2 id="continue-watching-title">Continue Watching</h2>
+          <button type="button" className="continue-clear-button" onClick={clearWatchHistory}>
+            Clear All History
+          </button>
+          <span>Local: {localTime}</span>
         </div>
 
-        <div className="content-belt-viewport" ref={beltRef}>
-          <div className="content-belt-track">
-            {beltItems.map((movie, index) => (
-              <BeltCard
-                key={`${title}-${movie.media_type}-${movie.id}`}
-                movie={movie}
-                index={index}
-              />
-            ))}
-          </div>
+        <div className="continue-watching-row">
+          {recentlyWatchedMovies.slice(0, 12).map((movie) => {
+            const resumeTimeSeconds = getResumeTimeSeconds(movie)
+            const progressPercent = getProgressPercent(movie)
+
+            return (
+              <article
+                key={`continue-${getMediaItemKey(movie)}`}
+                className="continue-card"
+                style={{ '--continue-image': `url(${movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)})` }}
+              >
+                <div className="continue-card-shade" />
+                <span className="continue-card-type">{movie.media_type === 'tv' ? 'TV' : 'Movie'}</span>
+                <button
+                  type="button"
+                  className="continue-card-remove"
+                  onClick={() => removeHistoryItem(movie)}
+                  aria-label={`Remove ${movie.title} from watch history`}
+                >
+                  ×
+                </button>
+                <button
+                  type="button"
+                  className="continue-card-play"
+                  onClick={() => playHistoryItem(movie)}
+                  aria-label={`Continue ${movie.title}`}
+                >
+                  ▶
+                </button>
+                <div className="continue-card-copy">
+                  <h3>{movie.title}</h3>
+                  <p>{resumeTimeSeconds > 0 ? `Resume at ${formatResumeTime(resumeTimeSeconds)}` : 'Continue from where you left off'}</p>
+                  <div className="continue-progress-track" aria-hidden="true">
+                    <span style={{ width: `${progressPercent}%` }} />
+                  </div>
+                  <div className="continue-progress-meta">
+                    <span>{progressPercent}% completed</span>
+                    <span>{resumeTimeSeconds > 0 ? formatResumeTime(resumeTimeSeconds) : 'Just started'}</span>
+                  </div>
+                </div>
+              </article>
+            )
+          })}
         </div>
       </section>
     )
@@ -1601,10 +2269,31 @@ const BrowsePage = () => {
   const toggleHeroFocus = () => {
     setIsHeroCollapsed((isCollapsed) => !isCollapsed)
   }
+  const filteredTrendingMovies = selectedGenreIds.length > 0
+    ? trendingMovies.filter((movie) => movie.genre_ids?.some((genreId) => selectedGenreIds.includes(genreId)))
+    : trendingMovies
   const heroRows = [
-    { id: 'trending', title: `Trending ${mediaPluralLabel}`, items: trendingMovies, accent: 'Live from TMDB' },
-    { id: 'top-rated', title: `Top Rated ${mediaPluralLabel}`, items: topRatedMovies, accent: 'Highest rated' },
-    { id: 'popular', title: `Popular ${mediaPluralLabel}`, items: movieList, accent: 'This week' }
+    {
+      id: 'trending',
+      title: `Trending ${mediaPluralLabel}`,
+      items: filteredTrendingMovies,
+      accent: 'Live from TMDB',
+      onLoadMore: loadMoreTrendingTitles
+    },
+    {
+      id: 'top-rated',
+      title: `Top Rated ${mediaPluralLabel}`,
+      items: topRatedMovies,
+      accent: 'Highest rated',
+      onLoadMore: loadMoreTopRatedTitles
+    },
+    {
+      id: 'popular',
+      title: `Popular ${mediaPluralLabel}`,
+      items: movieList,
+      accent: 'This week',
+      onLoadMore: loadMorePopularTitles
+    }
   ]
   const searchResults = debouncedSearchTerm.trim().length >= SEARCH_MIN_LENGTH ? movieList : []
 
@@ -1624,7 +2313,14 @@ const BrowsePage = () => {
   }
 
   if (activeWatchMediaType && activeWatchId) {
-    return <WatchRoute mediaType={activeWatchMediaType} id={activeWatchId} />
+    return (
+      <WatchRoute
+        mediaType={activeWatchMediaType}
+        id={activeWatchId}
+        authUser={authUser}
+        onWatchProgress={handleWatchProgress}
+      />
+    )
   }
 
   return (
@@ -1649,10 +2345,6 @@ const BrowsePage = () => {
             onClick={() => setMediaFilter('tv')}
           >
             TV
-          </button>
-
-          <button type="button" className="stream-nav-item is-disabled" disabled>
-            Sports
           </button>
 
           <button
@@ -1758,10 +2450,15 @@ const BrowsePage = () => {
           <div className="stream-hero-media" style={heroMediaStyle}>
             {heroTrailerUrl && !isHeroCollapsed && (
               <iframe
+                ref={heroVideoRef}
                 className="stream-hero-video"
                 src={heroTrailerUrl}
                 title={`${heroTitle?.title || 'Featured'} trailer`}
-                allow="autoplay; encrypted-media; picture-in-picture"
+                loading="eager"
+                fetchPriority="high"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allow="autoplay *; encrypted-media *; picture-in-picture *"
+                onLoad={syncHeroAudio}
                 allowFullScreen
               />
             )}
@@ -1801,6 +2498,26 @@ const BrowsePage = () => {
               <button type="button" className="stream-action-secondary" onClick={() => heroTitle && openTitleDetails(heroTitle)}>
                 ● Info
               </button>
+              <div className="stream-hero-volume" aria-label="Featured trailer volume">
+                <button
+                  type="button"
+                  className={`stream-hero-volume-button ${isHeroMuted || heroVolume <= 0 ? 'is-muted' : ''}`}
+                  onClick={toggleHeroAudio}
+                  aria-label={isHeroMuted || heroVolume <= 0 ? 'Unmute featured trailer' : 'Mute featured trailer'}
+                  aria-pressed={isHeroMuted || heroVolume <= 0}
+                >
+                  {isHeroMuted || heroVolume <= 0 ? 'Mute' : 'Audio'}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={heroEffectiveVolume}
+                  onChange={changeHeroVolume}
+                  aria-label="Featured trailer volume"
+                />
+              </div>
             </div>
           </div>
 
@@ -1817,13 +2534,23 @@ const BrowsePage = () => {
         </button>
 
         <section className="stream-belts" aria-label="Browse rows" ref={browseRowsRef}>
+          <ContinueWatchingSection />
+
           {heroRows.map((row, index) => (
             <ContentBelt
               key={row.id}
               title={row.title}
               items={row.items}
               accent={row.accent}
-              speed={52 + index * 8}
+              onLoadMore={row.onLoadMore}
+              beltKey={row.id}
+              onOpenTitle={openTitleDetails}
+              beltVisibleCounts={beltVisibleCounts}
+              setBeltVisibleCounts={setBeltVisibleCounts}
+              loadingMoreBeltKeys={loadingMoreBeltKeys}
+              setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+              exhaustedBeltKeys={exhaustedBeltKeys}
+              setExhaustedBeltKeys={setExhaustedBeltKeys}
             />
           ))}
 
@@ -1839,6 +2566,15 @@ const BrowsePage = () => {
               title={`${row.title} ${mediaPluralLabel}`}
               items={row.items}
               accent="Genre"
+              onLoadMore={() => loadMoreGenreRow(row.id)}
+              beltKey={`genre-${row.id}`}
+              onOpenTitle={openTitleDetails}
+              beltVisibleCounts={beltVisibleCounts}
+              setBeltVisibleCounts={setBeltVisibleCounts}
+              loadingMoreBeltKeys={loadingMoreBeltKeys}
+              setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+              exhaustedBeltKeys={exhaustedBeltKeys}
+              setExhaustedBeltKeys={setExhaustedBeltKeys}
             />
           ))}
         </section>
@@ -1858,6 +2594,7 @@ const BrowsePage = () => {
           favoriteMovieIds={favoriteMovieIds}
           onToggleFavorite={toggleFavoriteMovie}
           onOpenTitle={openTitleDetails}
+          onPlayTitle={playTitle}
           onClose={closeTitleDetails}
         />
       )}

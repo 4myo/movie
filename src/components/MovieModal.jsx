@@ -1,5 +1,8 @@
-import React, { useEffect, useState } from 'react'
-import { getMediaLabel, getMediaPluralLabel, getStreamingProviders } from '../utils/media.js'
+import React, { useEffect } from 'react'
+import {
+  getMediaLabel,
+  getMediaPluralLabel
+} from '../utils/media.js'
 
 const getMediaItemKey = (item) => `${item?.media_type || 'movie'}-${item?.id ?? ''}`
 
@@ -20,12 +23,10 @@ const MovieModal = ({
   similarMovies = [],
   isSimilarLoading = false,
   onWatchTrailer,
+  onPlayTitle,
   onToggleFavorite,
   favoriteMovieIds = []
 }) => {
-  const providers = getStreamingProviders()
-  const [selectedProvider, setSelectedProvider] = useState(providers[0]?.id || '')
-  const [isPlayerOpen, setIsPlayerOpen] = useState(false)
   const mediaLabel = getMediaLabel(movie?.media_type)
   const mediaPluralLabel = getMediaPluralLabel(movie?.media_type)
   const isFavorite = favoriteMovieIds.includes(getMediaItemKey(movie))
@@ -61,14 +62,16 @@ const MovieModal = ({
   const heroImage = imageUrl(movie.backdrop_path || movie.poster_path, movie.backdrop_path ? 'original' : 'w780')
   const canPlay = Boolean(movie?.id)
   const isTvShow = movie.media_type === 'tv'
-  const selectedProviderDetails = providers.find((provider) => provider.id === selectedProvider) || providers[0]
-  const playerUrl = !movie?.id || !selectedProviderDetails
-    ? ''
-    : isTvShow
-      ? selectedSeasonNumber && selectedEpisodeNumber
-        ? selectedProviderDetails.tvEpisodeUrl(movie.id, selectedSeasonNumber, selectedEpisodeNumber)
-        : ''
-      : selectedProviderDetails.movieUrl(movie.id)
+  const handlePlayTitle = () => {
+    if (canPlay) {
+      onPlayTitle?.(movie)
+    }
+  }
+  const handleOpenTrailer = () => {
+    if (trailerUrl) {
+      window.open(trailerUrl, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   return (
     <div className="movie-modal-backdrop cinematic-modal-backdrop" onClick={onClose}>
@@ -91,61 +94,45 @@ const MovieModal = ({
           </div>
 
           <div className="cinematic-title-actions">
-            <button type="button" className="cinematic-play-button" onClick={() => setIsPlayerOpen(true)} disabled={!canPlay}>
+            <button type="button" className="cinematic-play-button" onClick={handlePlayTitle} disabled={!canPlay}>
               ▶ Play
             </button>
-            <button type="button" className="cinematic-round-button" onClick={() => onToggleFavorite?.(movie)} aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}>
-              {isFavorite ? '✓' : '+'}
+
+            <button
+              type="button"
+              className="cinematic-action-button"
+              onClick={() => onToggleFavorite?.(movie)}
+              aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+              title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+            >
+              <span className="cinematic-round-button" aria-hidden="true">{isFavorite ? '✓' : '+'}</span>
+              <span className="cinematic-action-label">{isFavorite ? 'Saved' : 'Favorite'}</span>
             </button>
-            <button type="button" className="cinematic-round-button" onClick={() => trailerUrl && window.open(trailerUrl, '_blank', 'noopener,noreferrer')} disabled={!trailerUrl} aria-label="Open trailer">
-              ⛶
+
+            <button
+              type="button"
+              className="cinematic-action-button"
+              onClick={handleOpenTrailer}
+              disabled={!trailerUrl}
+              aria-label="Open trailer"
+              title="Open trailer"
+            >
+              <span className="cinematic-round-button" aria-hidden="true">⛶</span>
+              <span className="cinematic-action-label">Trailer</span>
             </button>
-            <button type="button" className="cinematic-round-button is-glow" onClick={() => setIsPlayerOpen(true)} disabled={!streamingUrl && !canPlay} aria-label="Open player servers">
-              ▣
+
+            <button
+              type="button"
+              className="cinematic-action-button"
+              onClick={handlePlayTitle}
+              disabled={!canPlay}
+              aria-label="Open player"
+              title="Open player"
+            >
+              <span className="cinematic-round-button is-glow" aria-hidden="true">▣</span>
+              <span className="cinematic-action-label">Player</span>
             </button>
           </div>
-
-          {isPlayerOpen && (
-            <section className="cinematic-player-section" aria-label={`${movie.title} player`}>
-              <div className="cinematic-player-toolbar">
-                <div>
-                  <span>Now playing</span>
-                  <strong>{movie.title}</strong>
-                </div>
-                <button type="button" onClick={() => setIsPlayerOpen(false)}>Close player</button>
-              </div>
-
-              <div className="cinematic-player-frame">
-                {playerUrl ? (
-                  <iframe
-                    key={playerUrl}
-                    src={playerUrl}
-                    title={`${movie.title} player`}
-                    loading="eager"
-                    referrerPolicy="strict-origin-when-cross-origin"
-                    allow="autoplay *; encrypted-media *; picture-in-picture *; web-share *"
-                    allowFullScreen
-                  />
-                ) : (
-                  <div className="cinematic-player-empty">Select a season and episode to begin playback.</div>
-                )}
-              </div>
-
-              <div className="cinematic-server-grid" aria-label="Streaming servers">
-                {providers.map((provider) => (
-                  <button
-                    key={provider.id}
-                    type="button"
-                    className={selectedProvider === provider.id ? 'is-active' : ''}
-                    onClick={() => setSelectedProvider(provider.id)}
-                    aria-pressed={selectedProvider === provider.id}
-                  >
-                    {provider.name}
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
 
           {isTvShow && seasonOptions.length > 0 && (
             <div className="cinematic-episode-controls">
