@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useDebounce } from 'use-debounce'
 import { useLocation, useNavigate } from 'react-router-dom'
-import Search from './components/Search.jsx'
 import Spinner from './components/Spinner.jsx'
-import MovieCard from './components/MovieCard.jsx'
 import MovieModal from './components/MovieModal.jsx'
 import { AuthPage } from './components/AuthModal.jsx'
 import { supabase } from './supabaseClient.js'
@@ -11,6 +9,7 @@ import {
   getDetailPath,
   getMediaPluralLabel,
   getStreamingUrl,
+  getStreamingProviders,
   getTrailerEmbedUrl,
   getTvEpisodeStreamingUrl,
   MEDIA_TYPE_OPTIONS,
@@ -32,15 +31,127 @@ const API_OPTIONS = {
 
 const SEARCH_MIN_LENGTH = 3
 const CACHE_TTL_MS = 60 * 1000
+const PERSISTENT_CACHE_TTL_MS = 12 * 60 * 60 * 1000
+const PERSISTENT_CACHE_PREFIX = 'myfirstapp:tmdb-cache:v2:'
+const PERSISTENT_CACHE_KEYS = [
+  'default-genre-rows:',
+  'genre-row:',
+  'genres:',
+  'titles:',
+  'top-rated:',
+  'trending:'
+]
 const responseCache = new Map()
+const MOVIE_BELT_GENRES = [
+  'Action',
+  'Adventure',
+  'Animation',
+  'Comedy',
+  'Crime',
+  'Documentary',
+  'Drama',
+  'Family',
+  'Fantasy',
+  'History',
+  'Horror',
+  'Music',
+  'Mystery',
+  'Romance',
+  'Science Fiction',
+  'Thriller',
+  'TV Movie',
+  'War',
+  'Western'
+]
+const TV_BELT_GENRES = [
+  'Action & Adventure',
+  'Animation',
+  'Comedy',
+  'Crime',
+  'Documentary',
+  'Drama',
+  'Family',
+  'Kids',
+  'Mystery',
+  'News',
+  'Reality',
+  'Sci-Fi & Fantasy',
+  'Soap',
+  'Talk',
+  'War & Politics',
+  'Western'
+]
+const MAX_GENRE_ROWS = 32
+const imageBaseUrl = 'https://image.tmdb.org/t/p/'
+
+const getBackdropUrl = (item, size = 'w1280') => {
+  if (item?.backdrop_path) return `${imageBaseUrl}${size}${item.backdrop_path}`
+  if (item?.poster_path) return `${imageBaseUrl}w780${item.poster_path}`
+  return '/hero-bg.png'
+}
+
+const getPosterUrl = (item, size = 'w500') =>
+  item?.poster_path ? `${imageBaseUrl}${size}${item.poster_path}` : '/no-movie.png'
+
+const getHeroTrailerEmbedUrl = (videoKey) =>
+  videoKey
+    ? `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0&loop=1&playlist=${videoKey}&rel=0&modestbranding=1&playsinline=1`
+    : ''
+
+const shouldPersistCacheKey = (key) => PERSISTENT_CACHE_KEYS.some((prefix) => key.startsWith(prefix))
+
+const getPersistentCacheEntry = (key) => {
+  if (!shouldPersistCacheKey(key) || typeof window === 'undefined' || !window.localStorage) return null
+
+  try {
+    const rawEntry = window.localStorage.getItem(`${PERSISTENT_CACHE_PREFIX}${key}`)
+    if (!rawEntry) return null
+
+    const entry = JSON.parse(rawEntry)
+    if (!entry?.expiresAt || Date.now() > entry.expiresAt) {
+      window.localStorage.removeItem(`${PERSISTENT_CACHE_PREFIX}${key}`)
+      return null
+    }
+
+    responseCache.set(key, entry)
+    return entry.data
+  } catch {
+    return null
+  }
+}
+
+const setPersistentCacheEntry = (key, entry) => {
+  if (!shouldPersistCacheKey(key) || typeof window === 'undefined' || !window.localStorage) return
+
+  try {
+    window.localStorage.setItem(`${PERSISTENT_CACHE_PREFIX}${key}`, JSON.stringify(entry))
+  } catch {
+    // Browser storage may be full or disabled. Memory cache still works for this session.
+  }
+}
+
+const removeCacheEntry = (key) => {
+  responseCache.delete(key)
+
+  if (!shouldPersistCacheKey(key) || typeof window === 'undefined' || !window.localStorage) return
+
+  try {
+    window.localStorage.removeItem(`${PERSISTENT_CACHE_PREFIX}${key}`)
+  } catch {
+    // Ignore storage errors; cache invalidation is best effort.
+  }
+}
 
 const getCacheEntry = (key) => {
   const entry = responseCache.get(key)
 
-  if (!entry) return null
+  if (!entry) return getPersistentCacheEntry(key)
 
   if (Date.now() > entry.expiresAt) {
     responseCache.delete(key)
+    if (shouldPersistCacheKey(key) && typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(`${PERSISTENT_CACHE_PREFIX}${key}`)
+    }
     return null
   }
 
@@ -48,20 +159,23 @@ const getCacheEntry = (key) => {
 }
 
 const setCacheEntry = (key, data, ttl = CACHE_TTL_MS) => {
-  responseCache.set(key, {
+  const entry = {
     data,
     expiresAt: Date.now() + ttl
-  })
+  }
+
+  responseCache.set(key, entry)
+  setPersistentCacheEntry(key, entry)
 }
 
 const getCacheKey = (prefix, value) => `${prefix}:${value}`
 
-const fetchJson = async (key, request) => {
+const fetchJson = async (key, request, ttl = CACHE_TTL_MS) => {
   const cached = getCacheEntry(key)
   if (cached) return cached
 
   const data = await request()
-  setCacheEntry(key, data)
+  setCacheEntry(key, data, ttl)
   return data
 }
 
@@ -74,13 +188,62 @@ const upsertRuntime = (items, runtimeMap) =>
 const getRuntimeKey = (item) => `${item.media_type || 'movie'}-${item.id}`
 const getMediaItemKey = (item) => `${item.media_type || 'movie'}-${item.id}`
 
+const orderGenresForRows = (availableGenres = [], selectedMediaFilter = 'movie') => {
+  const preferredGenreNames = selectedMediaFilter === 'tv' ? TV_BELT_GENRES : MOVIE_BELT_GENRES
+  const genreByName = new Map(availableGenres.map((genre) => [genre.name.toLowerCase(), genre]))
+  const orderedGenres = preferredGenreNames
+    .map((name) => genreByName.get(name.toLowerCase()))
+    .filter(Boolean)
+  const orderedGenreIds = new Set(orderedGenres.map((genre) => genre.id))
+  const remainingGenres = availableGenres
+    .filter((genre) => !orderedGenreIds.has(genre.id))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  return [...orderedGenres, ...remainingGenres].slice(0, MAX_GENRE_ROWS)
+}
+
+const fetchGenreRowBatch = async (rowsToLoad, selectedMediaFilter, startIndex, batchSize) => {
+  const rowBatch = rowsToLoad.slice(startIndex, startIndex + batchSize)
+  const rowSettledResults = await Promise.allSettled(
+    rowBatch.map(async (genre) => {
+      const params = new URLSearchParams({
+        sort_by: 'popularity.desc',
+        with_genres: genre.id.toString(),
+        include_adult: 'false',
+        language: 'en-US',
+        page: '1'
+      })
+      const cacheKey = getCacheKey('genre-row', `${selectedMediaFilter}:${genre.id}:${params.toString()}`)
+      const data = await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/discover/${selectedMediaFilter}?${params.toString()}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        },
+        PERSISTENT_CACHE_TTL_MS
+      )
+
+      return {
+        id: genre.id,
+        title: genre.name,
+        items: normalizeMediaList((data.results || []).slice(0, 14), selectedMediaFilter)
+      }
+    })
+  )
+
+  return rowSettledResults
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value)
+    .filter((row) => row.items.length > 0)
+}
+
 const getSectionMediaTypes = (mediaFilter) => {
   if (mediaFilter === 'movie') return ['movie']
   return ['tv']
 }
 
 const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onClose }) => {
-  const navigate = useNavigate()
   const [movie, setMovie] = useState(null)
   const [trailerUrl, setTrailerUrl] = useState('')
   const [streamingUrl, setStreamingUrl] = useState('')
@@ -274,6 +437,7 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
       similarMovies={similarMovies}
       isSimilarLoading={isSimilarLoading}
       onWatchTrailer={onOpenTitle}
+      onPlayTitle={(title) => window.open(`/watch/${title.media_type || 'movie'}/${title.id}`, '_blank', 'noopener,noreferrer')}
       onToggleFavorite={onToggleFavorite}
       favoriteMovieIds={favoriteMovieIds}
     />
@@ -307,55 +471,308 @@ const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorM
   </AppShell>
 )
 
+const WatchRoute = ({ mediaType, id }) => {
+  const navigate = useNavigate()
+  const [movie, setMovie] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [hasLoadError, setHasLoadError] = useState(false)
+  const [selectedProvider, setSelectedProvider] = useState('111movies')
+  const [seasonOptions, setSeasonOptions] = useState([])
+  const [episodeOptions, setEpisodeOptions] = useState([])
+  const [selectedSeasonNumber, setSelectedSeasonNumber] = useState(null)
+  const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState(null)
+  const [isServerMenuOpen, setIsServerMenuOpen] = useState(false)
+  const providers = useMemo(() => getStreamingProviders(), [])
+  const isTvShow = mediaType === 'tv'
+
+  useEffect(() => {
+    const loadWatchTitle = async () => {
+      setIsLoading(true)
+      setHasLoadError(false)
+      setMovie(null)
+      setSeasonOptions([])
+      setEpisodeOptions([])
+      setSelectedSeasonNumber(null)
+      setSelectedEpisodeNumber(null)
+
+      try {
+        const detailEndpoint = isTvShow ? 'tv' : 'movie'
+        const detailData = await fetchJson(
+          `watch-detail:${mediaType}:${id}`,
+          async () => {
+            const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${id}`, API_OPTIONS)
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+            return response.json()
+          },
+          5 * CACHE_TTL_MS
+        )
+        const normalizedItem = normalizeMediaItem(detailData, mediaType)
+        const validSeasons = isTvShow
+          ? (detailData.seasons || []).filter((season) => season.season_number > 0)
+          : []
+
+        setMovie(normalizedItem)
+        setSeasonOptions(validSeasons)
+        setSelectedSeasonNumber(validSeasons[0]?.season_number || null)
+      } catch (error) {
+        console.log(`Error loading watch title: ${error}`)
+        setHasLoadError(true)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    loadWatchTitle()
+  }, [id, isTvShow, mediaType])
+
+  useEffect(() => {
+    const loadEpisodes = async () => {
+      if (!isTvShow || !selectedSeasonNumber) {
+        setEpisodeOptions([])
+        setSelectedEpisodeNumber(null)
+        return
+      }
+
+      try {
+        const data = await fetchJson(
+          `watch-season:${id}:${selectedSeasonNumber}`,
+          async () => {
+            const response = await fetch(`${API_BASE_URL}/tv/${id}/season/${selectedSeasonNumber}`, API_OPTIONS)
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+            return response.json()
+          },
+          5 * CACHE_TTL_MS
+        )
+        const validEpisodes = (data.episodes || []).filter((episode) => episode.episode_number > 0)
+
+        setEpisodeOptions(validEpisodes)
+        setSelectedEpisodeNumber(validEpisodes[0]?.episode_number || null)
+      } catch (error) {
+        console.log(`Error loading watch episodes: ${error}`)
+        setEpisodeOptions([])
+        setSelectedEpisodeNumber(null)
+      }
+    }
+
+    loadEpisodes()
+  }, [id, isTvShow, selectedSeasonNumber])
+
+  const selectedProviderDetails = providers.find((provider) => provider.id === selectedProvider) || providers[0]
+  const playerUrl = useMemo(() => {
+    if (!movie?.id || !selectedProviderDetails) return ''
+
+    if (isTvShow) {
+      if (!selectedSeasonNumber || !selectedEpisodeNumber) return ''
+      return selectedProviderDetails.tvEpisodeUrl(movie.id, selectedSeasonNumber, selectedEpisodeNumber)
+    }
+
+    return selectedProviderDetails.movieUrl(movie.id)
+  }, [
+    isTvShow,
+    movie?.id,
+    selectedEpisodeNumber,
+    selectedProviderDetails,
+    selectedSeasonNumber
+  ])
+  const backdropUrl = movie?.backdrop_path
+    ? `https://image.tmdb.org/t/p/original${movie.backdrop_path}`
+    : '/hero-bg.png'
+
+  if (isLoading) {
+    return (
+      <AppShell>
+        <div className="watch-loader-state">
+          <Spinner />
+        </div>
+      </AppShell>
+    )
+  }
+
+  const leaveWatchPage = () => {
+    if (window.history.length > 1) {
+      navigate(-1)
+      return
+    }
+
+    navigate('/')
+  }
+
+  if (!movie || hasLoadError) {
+    return (
+      <AppShell>
+        <div className="watch-loader-state">
+          <div className="watch-error-card">
+            <h1>Title unavailable</h1>
+            <button type="button" onClick={leaveWatchPage}>Back home</button>
+          </div>
+        </div>
+      </AppShell>
+    )
+  }
+
+  return (
+    <AppShell>
+      <div className="watch-page" style={{ backgroundImage: `url(${backdropUrl})` }}>
+        <div className="watch-page-shade" />
+
+        <header className="watch-header">
+          <button type="button" className="watch-back-button" onClick={leaveWatchPage}>
+            Back
+          </button>
+          <div>
+            <p>Now playing</p>
+            <h1>{movie.title}</h1>
+          </div>
+        </header>
+
+        <section className="watch-player-shell" aria-label={`${movie.title} player`}>
+          {playerUrl ? (
+            <iframe
+              key={playerUrl}
+              src={playerUrl}
+              title={`${movie.title} player`}
+              className="watch-player-frame"
+              loading="eager"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allow="autoplay *; encrypted-media *; picture-in-picture *; web-share *"
+              allowFullScreen
+            />
+          ) : (
+            <div className="watch-player-empty">Select a server, season, and episode to begin playback.</div>
+          )}
+        </section>
+
+        <aside className="watch-server-panel">
+          <div className="watch-server-heading">
+            <span>Playback server</span>
+            <button type="button" onClick={() => setIsServerMenuOpen((open) => !open)}>
+              {isServerMenuOpen ? 'Close' : 'Change'}
+            </button>
+          </div>
+
+          <label className="watch-server-select-label">
+            <span className="sr-only">Streaming server</span>
+            <button
+              type="button"
+              className="watch-server-current"
+              onClick={() => setIsServerMenuOpen((open) => !open)}
+              aria-expanded={isServerMenuOpen}
+            >
+              <span>{selectedProviderDetails?.label || selectedProviderDetails?.name}</span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+          </label>
+
+          {isServerMenuOpen && (
+            <div className="watch-server-options" role="listbox" aria-label="Streaming servers">
+              {providers.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  className={selectedProvider === provider.id ? 'is-active' : ''}
+                  onClick={() => {
+                    setSelectedProvider(provider.id)
+                    setIsServerMenuOpen(false)
+                  }}
+                  role="option"
+                  aria-selected={selectedProvider === provider.id}
+                >
+                  {provider.label || provider.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {isTvShow && (
+            <div className="watch-episode-grid">
+              <label>
+                <span>Season</span>
+                <select value={selectedSeasonNumber ?? ''} onChange={(event) => setSelectedSeasonNumber(Number(event.target.value))}>
+                  {seasonOptions.map((season) => (
+                    <option key={season.season_number} value={season.season_number}>
+                      {season.name || `Season ${season.season_number}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span>Episode</span>
+                <select value={selectedEpisodeNumber ?? ''} onChange={(event) => setSelectedEpisodeNumber(Number(event.target.value))}>
+                  {episodeOptions.map((episode) => (
+                    <option key={episode.episode_number} value={episode.episode_number}>
+                      Episode {episode.episode_number}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </aside>
+      </div>
+    </AppShell>
+  )
+}
+
 const BrowsePage = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const backgroundLocation = location.state?.backgroundLocation
   const detailMatch = location.pathname.match(/^\/title\/(movie|tv)\/(\d+)$/)
+  const watchMatch = location.pathname.match(/^\/watch\/(movie|tv)\/(\d+)$/)
   const authMatch = location.pathname.match(/^\/account\/(login|signup)$/)
   const activeDetailMediaType = detailMatch?.[1] || null
   const activeDetailId = detailMatch?.[2] || null
+  const activeWatchMediaType = watchMatch?.[1] || null
+  const activeWatchId = watchMatch?.[2] || null
   const [searchTerm, setSearchTerm] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [movieList, setMovieList] = useState([])
   const [trendingMovies, setTrendingMovies] = useState([])
   const [topRatedMovies, setTopRatedMovies] = useState([])
+  const [genreRows, setGenreRows] = useState([])
+  const [heroTitle, setHeroTitle] = useState(null)
+  const [heroTrailerUrl, setHeroTrailerUrl] = useState('')
+  const [heroIndex, setHeroIndex] = useState(0)
+  const [isHeroCollapsed, setIsHeroCollapsed] = useState(false)
   const [favoriteMovies, setFavoriteMovies] = useState([])
   const [recentlyWatchedMovies, setRecentlyWatchedMovies] = useState([])
   const [isLoading, setIsLoading] = useState(false)
-  const [isTrendingLoading, setIsTrendingLoading] = useState(false)
-  const [isTopRatedLoading, setIsTopRatedLoading] = useState(false)
-  const [isFavoritesLoading, setIsFavoritesLoading] = useState(false)
-  const [isRecentlyWatchedLoading, setIsRecentlyWatchedLoading] = useState(false)
+  const [_isTrendingLoading, setIsTrendingLoading] = useState(false)
+  const [_isTopRatedLoading, setIsTopRatedLoading] = useState(false)
+  const [isGenreRowsLoading, setIsGenreRowsLoading] = useState(false)
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [_isFavoritesLoading, setIsFavoritesLoading] = useState(false)
+  const [_isRecentlyWatchedLoading, setIsRecentlyWatchedLoading] = useState(false)
   const [debouncedSearchTerm] = useDebounce(searchTerm, 500)
   const [mediaFilter, setMediaFilter] = useState('movie')
   const [genreList, setGenreList] = useState([])
   const [selectedGenreIds, setSelectedGenreIds] = useState([])
-  const [isGenrePanelOpen, setIsGenrePanelOpen] = useState(false)
+  const [_isGenrePanelOpen, setIsGenrePanelOpen] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [movieRuntimeMap, setMovieRuntimeMap] = useState({})
   const [authUser, setAuthUser] = useState(null)
-  const [isAuthLoading, setIsAuthLoading] = useState(true)
+  const [_isAuthLoading, setIsAuthLoading] = useState(true)
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [authErrorMessage, setAuthErrorMessage] = useState('')
   const [deletionNotice, setDeletionNotice] = useState('')
   const moviesSectionRef = useRef(null)
-  const trendingRowRef = useRef(null)
+  const browseRowsRef = useRef(null)
+  const _trendingRowRef = useRef(null)
   const topRatedRowRef = useRef(null)
   const favoritesRowRef = useRef(null)
-  const recentlyWatchedRowRef = useRef(null)
+  const _recentlyWatchedRowRef = useRef(null)
 
   const selectedGenreSet = useMemo(() => new Set(selectedGenreIds), [selectedGenreIds])
   const mediaPluralLabel = useMemo(() => getMediaPluralLabel(mediaFilter), [mediaFilter])
 
-  const selectedGenreName = useMemo(() => {
+  const _selectedGenreName = useMemo(() => {
     if (selectedGenreIds.length !== 1) return 'All genres'
 
     return genreList.find((genre) => genre.id === selectedGenreIds[0])?.name || 'All genres'
   }, [genreList, selectedGenreIds])
 
-  const filteredFavoriteMovies = useMemo(() => {
+  const _filteredFavoriteMovies = useMemo(() => {
     if (selectedGenreIds.length === 0) {
       return favoriteMovies
     }
@@ -365,7 +782,7 @@ const BrowsePage = () => {
     )
   }, [favoriteMovies, selectedGenreIds, selectedGenreSet])
 
-  const filteredRecentlyWatchedMovies = useMemo(() => {
+  const _filteredRecentlyWatchedMovies = useMemo(() => {
     if (selectedGenreIds.length === 0) {
       return recentlyWatchedMovies
     }
@@ -398,7 +815,8 @@ const BrowsePage = () => {
                 const response = await fetch(`${API_BASE_URL}/genre/${endpoint}/list`, API_OPTIONS)
                 if (!response.ok) throw new Error(`Request failed: ${response.status}`)
                 return response.json()
-              }
+              },
+              PERSISTENT_CACHE_TTL_MS
             )
             return data.genres || []
           })
@@ -457,7 +875,8 @@ const BrowsePage = () => {
           const response = await fetch(`${endpoint}?${params.toString()}`, API_OPTIONS)
           if (!response.ok) throw new Error(`Request failed: ${response.status}`)
           return response.json()
-        }
+        },
+        PERSISTENT_CACHE_TTL_MS
       )
 
       if (!getCacheEntry(cacheKey)) {
@@ -489,14 +908,15 @@ const BrowsePage = () => {
           const response = await fetch(`${API_BASE_URL}/trending/${selectedMediaFilter}/week`, API_OPTIONS)
           if (!response.ok) throw new Error(`Request failed: ${response.status}`)
           return response.json()
-        }
+        },
+        PERSISTENT_CACHE_TTL_MS
       )
 
       if (!getCacheEntry(cacheKey)) {
         setCacheEntry(cacheKey, data)
       }
 
-      const results = normalizeMediaList((data.results || []).slice(0, 8), selectedMediaFilter)
+      const results = normalizeMediaList((data.results || []).slice(0, 16), selectedMediaFilter)
 
       setTrendingMovies(enrichMoviesWithRuntime(results))
     } catch (error) {
@@ -531,19 +951,70 @@ const BrowsePage = () => {
           const response = await fetch(`${API_BASE_URL}/discover/${selectedMediaFilter}?${params.toString()}`, API_OPTIONS)
           if (!response.ok) throw new Error(`Request failed: ${response.status}`)
           return response.json()
-        }
+        },
+        PERSISTENT_CACHE_TTL_MS
       )
 
       if (!getCacheEntry(cacheKey)) {
         setCacheEntry(cacheKey, data)
       }
 
-      setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 8), selectedMediaFilter)))
+      setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 16), selectedMediaFilter)))
     } catch (error) {
       console.log(`Error fetching top rated titles: ${error}`)
       setTopRatedMovies([])
     } finally {
       setIsTopRatedLoading(false)
+    }
+  }
+
+  const fetchGenreRows = async (selectedMediaFilter = 'movie', availableGenres = []) => {
+    if (availableGenres.length === 0) {
+      setGenreRows([])
+      return
+    }
+
+    setIsGenreRowsLoading(true)
+
+    try {
+      const rowsToLoad = orderGenresForRows(availableGenres, selectedMediaFilter)
+      const rowsCacheKey = getCacheKey(
+        'default-genre-rows',
+        `${selectedMediaFilter}:${rowsToLoad.map((genre) => genre.id).join(',')}`
+      )
+      const cachedRows = getCacheEntry(rowsCacheKey)
+
+      if (Array.isArray(cachedRows) && cachedRows.length > 0) {
+        setGenreRows(cachedRows)
+        return
+      }
+
+      if (Array.isArray(cachedRows) && cachedRows.length === 0) {
+        removeCacheEntry(rowsCacheKey)
+      }
+
+      const populatedRows = []
+      const rowBatchSize = 4
+
+      for (let index = 0; index < rowsToLoad.length; index += rowBatchSize) {
+        const rowBatch = await fetchGenreRowBatch(rowsToLoad, selectedMediaFilter, index, rowBatchSize)
+        populatedRows.push(...rowBatch)
+
+        if (populatedRows.length > 0) {
+          setGenreRows([...populatedRows])
+        }
+      }
+
+      if (populatedRows.length > 0) {
+        setCacheEntry(rowsCacheKey, populatedRows, PERSISTENT_CACHE_TTL_MS)
+      }
+
+      setGenreRows(populatedRows)
+    } catch (error) {
+      console.log(`Error fetching genre rows: ${error}`)
+      setGenreRows((currentRows) => currentRows)
+    } finally {
+      setIsGenreRowsLoading(false)
     }
   }
 
@@ -656,7 +1127,7 @@ const BrowsePage = () => {
     navigate('/')
   }
 
-  const toggleGenre = (genreId) => {
+  const _toggleGenre = (genreId) => {
     setSelectedGenreIds((currentGenres) =>
       currentGenres.includes(genreId)
         ? currentGenres.filter((id) => id !== genreId)
@@ -673,6 +1144,7 @@ const BrowsePage = () => {
     setSelectedGenreIds([])
     setMediaFilter('movie')
     setIsGenrePanelOpen(false)
+    setIsHeroCollapsed(false)
     setCurrentPage(1)
 
     requestAnimationFrame(() => {
@@ -690,7 +1162,7 @@ const BrowsePage = () => {
     }
   }
 
-  const scrollRow = (rowRef, direction) => {
+  const _scrollRow = (rowRef, direction) => {
     const row = rowRef.current
 
     if (!row) {
@@ -703,6 +1175,14 @@ const BrowsePage = () => {
       left: direction === 'left' ? -scrollAmount : scrollAmount,
       behavior: 'smooth'
     })
+  }
+
+  const toggleGenre = (genreId) => {
+    setSelectedGenreIds((currentGenres) =>
+      currentGenres.includes(genreId)
+        ? currentGenres.filter((id) => id !== genreId)
+        : [...currentGenres, genreId]
+    )
   }
 
   const fetchMovieRuntimes = async (movies) => {
@@ -752,7 +1232,7 @@ const BrowsePage = () => {
     }
   }
 
-  const renderShowcaseSkeletons = (count = 6) =>
+  const _renderShowcaseSkeletons = (count = 6) =>
     Array.from({ length: count }, (_, index) => (
       <div key={`showcase-skeleton-${index}`} className="movie-card-skeleton movie-card-skeleton-compact" aria-hidden="true">
         <div className="movie-card-skeleton-poster" />
@@ -762,7 +1242,7 @@ const BrowsePage = () => {
       </div>
     ))
 
-  const renderGridSkeletons = (count = 12) =>
+  const _renderGridSkeletons = (count = 12) =>
     Array.from({ length: count }, (_, index) => (
       <div key={`grid-skeleton-${index}`} className="movie-card-skeleton" aria-hidden="true">
         <div className="movie-card-skeleton-poster" />
@@ -779,7 +1259,7 @@ const BrowsePage = () => {
       try {
         const data = await authApi.me()
         setAuthUser(data?.user || null)
-      } catch (error) {
+      } catch {
         setAuthUser(null)
       } finally {
         setIsAuthLoading(false)
@@ -814,6 +1294,74 @@ const BrowsePage = () => {
     fetchTopRatedTitles(selectedGenreIds, mediaFilter)
     topRatedRowRef.current?.scrollTo({ left: 0, behavior: 'smooth' })
   }, [selectedGenreIds])
+
+  useEffect(() => {
+    fetchGenreRows(mediaFilter, genreList)
+  }, [genreList, mediaFilter])
+
+  useEffect(() => {
+    const scrollTarget = window.setTimeout(() => {
+      if (isHeroCollapsed) {
+        browseRowsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+
+      document.querySelector('.stream-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, isHeroCollapsed ? 420 : 0)
+
+    return () => {
+      window.clearTimeout(scrollTarget)
+    }
+  }, [isHeroCollapsed])
+
+  useEffect(() => {
+    let isActive = true
+
+    const loadHeroTrailer = async () => {
+      const heroCandidates = trendingMovies.filter((movie) => movie.backdrop_path || movie.poster_path)
+
+      if (heroCandidates.length === 0) {
+        setHeroTitle(null)
+        setHeroTrailerUrl('')
+        return
+      }
+
+      const selectedTitle = heroCandidates[((heroIndex % heroCandidates.length) + heroCandidates.length) % heroCandidates.length]
+      setHeroTitle(selectedTitle)
+      setHeroTrailerUrl('')
+
+      try {
+        const detailEndpoint = selectedTitle.media_type === 'tv' ? 'tv' : 'movie'
+        const data = await fetchJson(
+          `hero-videos:${selectedTitle.media_type}:${selectedTitle.id}`,
+          async () => {
+            const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${selectedTitle.id}/videos`, API_OPTIONS)
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+            return response.json()
+          },
+          5 * CACHE_TTL_MS
+        )
+        const video = (data.results || []).find((entry) =>
+          entry.site === 'YouTube' && ['Trailer', 'Teaser'].includes(entry.type)
+        )
+
+        if (isActive) {
+          setHeroTrailerUrl(getHeroTrailerEmbedUrl(video?.key))
+        }
+      } catch (error) {
+        console.log(`Error fetching hero trailer: ${error}`)
+        if (isActive) {
+          setHeroTrailerUrl('')
+        }
+      }
+    }
+
+    loadHeroTrailer()
+
+    return () => {
+      isActive = false
+    }
+  }, [heroIndex, trendingMovies])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -972,6 +1520,94 @@ const BrowsePage = () => {
     </div>
   )
 
+  const BeltCard = ({ movie, index = 0 }) => (
+    <article
+      className="belt-card"
+      onClick={() => openTitleDetails(movie)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openTitleDetails(movie)
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${movie.title}`}
+      style={{ '--card-index': index }}
+    >
+      <div className="belt-card-image-shell">
+        <img
+          className="belt-card-image"
+          src={movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)}
+          alt={movie.title}
+          loading="lazy"
+        />
+      </div>
+      <h3 className="belt-card-title">{movie.title}</h3>
+    </article>
+  )
+
+  const ContentBelt = ({ title, items = [], accent = '' }) => {
+    const beltRef = useRef(null)
+
+    if (items.length === 0) return null
+
+    const beltItems = items.slice(0, 12)
+    const scrollBelt = (direction) => {
+      beltRef.current?.scrollBy({
+        left: direction === 'left' ? -Math.max(window.innerWidth * 0.72, 280) : Math.max(window.innerWidth * 0.72, 280),
+        behavior: 'smooth'
+      })
+    }
+
+    return (
+      <section className="content-belt" aria-labelledby={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>
+        <div className="content-belt-heading">
+          <h2 id={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>{title}</h2>
+          {accent && <span>{accent}</span>}
+          <div className="content-belt-controls">
+            <button type="button" onClick={() => scrollBelt('left')} aria-label={`Scroll ${title} left`}>‹</button>
+            <button type="button" onClick={() => scrollBelt('right')} aria-label={`Scroll ${title} right`}>›</button>
+          </div>
+        </div>
+
+        <div className="content-belt-viewport" ref={beltRef}>
+          <div className="content-belt-track">
+            {beltItems.map((movie, index) => (
+              <BeltCard
+                key={`${title}-${movie.media_type}-${movie.id}`}
+                movie={movie}
+                index={index}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  const heroBackdrop = heroTitle ? getBackdropUrl(heroTitle, 'original') : '/hero-bg.png'
+  const heroMediaStyle = heroTrailerUrl ? undefined : { backgroundImage: `url(${heroBackdrop})` }
+  const changeHeroTitle = (direction) => {
+    const heroCandidates = trendingMovies.filter((movie) => movie.backdrop_path || movie.poster_path)
+    if (heroCandidates.length === 0) return
+
+    setIsHeroCollapsed(false)
+    setHeroIndex((currentIndex) => (currentIndex + direction + heroCandidates.length) % heroCandidates.length)
+    requestAnimationFrame(() => {
+      document.querySelector('.stream-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+  const toggleHeroFocus = () => {
+    setIsHeroCollapsed((isCollapsed) => !isCollapsed)
+  }
+  const heroRows = [
+    { id: 'trending', title: `Trending ${mediaPluralLabel}`, items: trendingMovies, accent: 'Live from TMDB' },
+    { id: 'top-rated', title: `Top Rated ${mediaPluralLabel}`, items: topRatedMovies, accent: 'Highest rated' },
+    { id: 'popular', title: `Popular ${mediaPluralLabel}`, items: movieList, accent: 'This week' }
+  ]
+  const searchResults = debouncedSearchTerm.trim().length >= SEARCH_MIN_LENGTH ? movieList : []
+
   if (isAuthRouteOpen) {
     return (
       <AccountAccessRoute
@@ -987,557 +1623,231 @@ const BrowsePage = () => {
     )
   }
 
+  if (activeWatchMediaType && activeWatchId) {
+    return <WatchRoute mediaType={activeWatchMediaType} id={activeWatchId} />
+  }
+
   return (
     <AppShell>
-      <div className="wrapper">
-        <div className="desktop-shell">
-          <aside className="desktop-sidebar desktop-sidebar-left">
-            <div className="desktop-sidebar-stack">
-              <section className="media-switcher" aria-labelledby="media-switcher-heading">
-                <div className="media-switcher-copy">
-                  <p className="media-switcher-label">Choose your lane</p>
-                  <h2 id="media-switcher-heading" className="media-switcher-title">Pick movies or TV shows</h2>
-                  <p className="media-switcher-text">Switch the feed between films and episodic picks.</p>
-                </div>
+      <div className={`streaming-home ${isHeroCollapsed ? 'is-browse-focused' : ''}`}>
+        <nav className="stream-nav" aria-label="Primary navigation">
+          <button type="button" className="stream-nav-item is-active" onClick={resetToHome}>
+            Home
+          </button>
 
-                <div className="media-switcher-grid">
-                  {MEDIA_TYPE_OPTIONS.map((option) => (
+          <button
+            type="button"
+            className={`stream-nav-item ${mediaFilter === 'movie' ? 'is-active-soft' : ''}`}
+            onClick={() => setMediaFilter('movie')}
+          >
+            Movies
+          </button>
+
+          <button
+            type="button"
+            className={`stream-nav-item ${mediaFilter === 'tv' ? 'is-active-soft' : ''}`}
+            onClick={() => setMediaFilter('tv')}
+          >
+            TV
+          </button>
+
+          <button type="button" className="stream-nav-item is-disabled" disabled>
+            Sports
+          </button>
+
+          <button
+            type="button"
+            className="stream-nav-icon"
+            onClick={() => setIsSearchOpen((open) => !open)}
+            aria-expanded={isSearchOpen}
+            aria-label="Search"
+          >
+            Search
+          </button>
+
+          {isAuthenticated ? (
+            <button type="button" className="stream-nav-icon" onClick={handleLogout} aria-label="Log out">
+              Logout
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="stream-nav-icon stream-login-button"
+              onClick={() => {
+                setAuthErrorMessage('')
+                navigate('/account/login')
+              }}
+              aria-label="Log in"
+            >
+              Login
+            </button>
+          )}
+        </nav>
+
+        {isSearchOpen && (
+          <div className="stream-search-layer">
+            <div className="stream-search-panel" role="search">
+              <div className="stream-search-row">
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  placeholder="Search movies or TV shows"
+                  aria-label="Search movies or TV shows"
+                  autoFocus
+                />
+                <button type="button" onClick={() => setIsSearchOpen(false)}>
+                  Close
+                </button>
+              </div>
+
+              <div className="stream-search-filters" aria-label="Search filters">
+                <button type="button" className={selectedGenreIds.length === 0 ? 'is-active' : ''} onClick={clearGenres}>All genres</button>
+                <button type="button" className={mediaFilter === 'movie' ? 'is-active' : ''} onClick={() => setMediaFilter('movie')}>Movies</button>
+                <button type="button" className={mediaFilter === 'tv' ? 'is-active' : ''} onClick={() => setMediaFilter('tv')}>TV</button>
+                <button type="button" onClick={() => setSearchTerm('')}>Popular</button>
+                <button type="button" onClick={() => setMovieList(topRatedMovies)}>Rating</button>
+                <button type="button" onClick={() => setCurrentPage(1)}>Newest</button>
+              </div>
+
+              {genreList.length > 0 && (
+                <div className="stream-search-genres" aria-label={`${mediaPluralLabel} genres`}>
+                  {genreList.map((genre) => (
                     <button
-                      key={option.id}
+                      key={genre.id}
                       type="button"
-                      className={`media-switcher-card ${mediaFilter === option.id ? 'is-active' : ''}`}
-                      onClick={() => setMediaFilter(option.id)}
+                      className={selectedGenreIds.includes(genre.id) ? 'is-active' : ''}
+                      onClick={() => toggleGenre(genre.id)}
+                      aria-pressed={selectedGenreIds.includes(genre.id)}
                     >
-                      <span className="media-switcher-card-title">{option.label}</span>
-                      <span className="media-switcher-card-copy">{option.description}</span>
+                      {genre.name}
                     </button>
                   ))}
-                </div>
-              </section>
-
-              <div className="genre-filter-shell desktop-genre-filter">
-                <div className="genre-filter-header">
-                  <div>
-                    <p className="genre-filter-label">Browse by genre</p>
-                    <p className="genre-filter-value">{selectedGenreName}</p>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="genre-filter-toggle"
-                    onClick={() => setIsGenrePanelOpen((open) => !open)}
-                    aria-expanded={isGenrePanelOpen}
-                    aria-controls="genre-filter-panel"
-                  >
-                    {isGenrePanelOpen ? 'Close genres' : 'Open genres'}
-                  </button>
-                </div>
-
-                <div id="genre-filter-panel" className={`genre-filter-panel ${isGenrePanelOpen ? 'is-open' : ''}`}>
-                  <div className="genre-filter-actions">
-                    <span>{selectedGenreIds.length} selected</span>
-                    <button
-                      type="button"
-                      className="genre-clear-button"
-                      onClick={clearGenres}
-                      disabled={selectedGenreIds.length === 0}
-                    >
-                      Clear filter
-                    </button>
-                  </div>
-
-                  <div className="genre-chip-grid">
-                    {genreList.map((genre) => {
-                      const isSelected = selectedGenreIds.includes(genre.id)
-
-                      return (
-                        <button
-                          key={genre.id}
-                          type="button"
-                          className={`genre-chip ${isSelected ? 'is-selected' : ''}`}
-                          onClick={() => toggleGenre(genre.id)}
-                        >
-                          {genre.name}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          <div className="desktop-main-column">
-            <header>
-              <div className="account-toolbar">
-                <div className="account-toolbar-copy">
-                  <p className="account-toolbar-label">Account</p>
-                  <p className="account-toolbar-value">
-                    {isAuthLoading
-                      ? 'Checking session...'
-                      : isAuthenticated
-                        ? `Signed in as ${authUser?.user_metadata?.name || authUser?.email}`
-                        : 'Browse as guest or sign in to unlock personal features'}
-                  </p>
-                </div>
-
-                {isAuthenticated ? (
-                  <button type="button" className="account-toolbar-button is-secondary" onClick={handleLogout}>
-                    Log out
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="account-toolbar-button"
-                    onClick={() => {
-                      setAuthErrorMessage('')
-                      navigate('/account/login')
-                    }}
-                  >
-                    Log in / Sign up
-                  </button>
-                )}
-              </div>
-
-              <h1>Find <span className="text-gradient">movies, shows, and series</span> you want to watch</h1>
-
-              <section className="media-switcher mobile-only-panel" aria-labelledby="mobile-media-switcher-heading">
-                <div className="media-switcher-copy">
-                  <p className="media-switcher-label">Choose your lane</p>
-                  <h2 id="mobile-media-switcher-heading" className="media-switcher-title">Pick movies or TV shows</h2>
-                  <p className="media-switcher-text">Switch the feed between films and episodic picks.</p>
-                </div>
-
-                <div className="media-switcher-grid">
-                  {MEDIA_TYPE_OPTIONS.map((option) => (
-                    <button
-                      key={`mobile-${option.id}`}
-                      type="button"
-                      className={`media-switcher-card ${mediaFilter === option.id ? 'is-active' : ''}`}
-                      onClick={() => setMediaFilter(option.id)}
-                    >
-                      <span className="media-switcher-card-title">{option.label}</span>
-                      <span className="media-switcher-card-copy">{option.description}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <div className="genre-filter-shell desktop-hidden-panel">
-                <div className="genre-filter-header">
-                  <div>
-                    <p className="genre-filter-label">Browse by genre</p>
-                    <p className="genre-filter-value">{selectedGenreName}</p>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="genre-filter-toggle"
-                    onClick={() => setIsGenrePanelOpen((open) => !open)}
-                    aria-expanded={isGenrePanelOpen}
-                    aria-controls="mobile-genre-filter-panel"
-                  >
-                    {isGenrePanelOpen ? 'Close genres' : 'Open genres'}
-                  </button>
-                </div>
-
-                <div id="mobile-genre-filter-panel" className={`genre-filter-panel ${isGenrePanelOpen ? 'is-open' : ''}`}>
-                  <div className="genre-filter-actions">
-                    <span>{selectedGenreIds.length} selected</span>
-                    <button
-                      type="button"
-                      className="genre-clear-button"
-                      onClick={clearGenres}
-                      disabled={selectedGenreIds.length === 0}
-                    >
-                      Clear filter
-                    </button>
-                  </div>
-
-                  <div className="genre-chip-grid">
-                    {genreList.map((genre) => {
-                      const isSelected = selectedGenreIds.includes(genre.id)
-
-                      return (
-                        <button
-                          key={`mobile-${genre.id}`}
-                          type="button"
-                          className={`genre-chip ${isSelected ? 'is-selected' : ''}`}
-                          onClick={() => toggleGenre(genre.id)}
-                        >
-                          {genre.name}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <Search searchTerm={searchTerm} setSearchTerm={setSearchTerm} />
-
-              <section className="trending-showcase" aria-labelledby="trending-movies-heading">
-                <div className="trending-showcase-header">
-                  <div>
-                    <p className="trending-showcase-label">Live from TMDB</p>
-                    <h2 id="trending-movies-heading" className="trending-showcase-title">Trending {mediaPluralLabel} 🔥</h2>
-                  </div>
-
-                  <div className="trending-showcase-meta">
-                    <p className="trending-showcase-copy">A quick look at what people are watching right now.</p>
-                    <div className="trending-showcase-controls" aria-label="Scroll trending titles">
-                      <button type="button" className="trending-scroll-button" onClick={() => scrollRow(trendingRowRef, 'left')}>
-                        ←
-                      </button>
-                      <button type="button" className="trending-scroll-button" onClick={() => scrollRow(trendingRowRef, 'right')}>
-                        →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {isTrendingLoading ? (
-                  <div className="trending-showcase-row skeleton-showcase-row">
-                    {renderShowcaseSkeletons()}
-                  </div>
-                ) : trendingMovies.length > 0 ? (
-                  <div className="trending-showcase-row" ref={trendingRowRef}>
-                    {trendingMovies.map((movie) => (
-                      <MovieCard
-                        key={`trending-${movie.media_type}-${movie.id}`}
-                        movie={movie}
-                        onWatchTrailer={openTitleDetails}
-                        onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
-                        compact
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="trending-showcase-empty">Trending titles are unavailable right now.</p>
-                )}
-              </section>
-
-              <section className="trending-showcase top-rated-showcase" aria-labelledby="top-rated-movies-heading">
-                <div className="trending-showcase-header">
-                  <div>
-                    <p className="trending-showcase-label">Curated from TMDB</p>
-                    <h2 id="top-rated-movies-heading" className="trending-showcase-title">Top Rated {mediaPluralLabel}</h2>
-                  </div>
-
-                  <div className="trending-showcase-meta">
-                    <p className="trending-showcase-copy">
-                      {selectedGenreIds.length > 0
-                        ? 'Highest rated picks for the genres you selected.'
-                        : `Highest rated ${mediaPluralLabel.toLowerCase()} people keep coming back to.`}
-                    </p>
-                    <div className="trending-showcase-controls" aria-label="Scroll top rated titles">
-                      <button type="button" className="trending-scroll-button" onClick={() => scrollRow(topRatedRowRef, 'left')}>
-                        ←
-                      </button>
-                      <button type="button" className="trending-scroll-button" onClick={() => scrollRow(topRatedRowRef, 'right')}>
-                        →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {topRatedMovies.length > 0 ? (
-                  <div className="showcase-row-shell">
-                    <div className={`trending-showcase-row ${isTopRatedLoading ? 'is-updating' : ''}`} ref={topRatedRowRef}>
-                      {topRatedMovies.map((movie) => (
-                        <MovieCard
-                          key={`top-rated-${movie.media_type}-${movie.id}`}
-                          movie={movie}
-                          onWatchTrailer={openTitleDetails}
-                          onToggleFavorite={toggleFavoriteMovie}
-                          isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
-                          compact
-                        />
-                      ))}
-                    </div>
-
-                    {isTopRatedLoading && (
-                      <div className="showcase-row-overlay" aria-hidden="true">
-                        <Spinner />
-                      </div>
-                    )}
-                  </div>
-                ) : isTopRatedLoading ? (
-                  <div className="trending-showcase-row skeleton-showcase-row">
-                    {renderShowcaseSkeletons()}
-                  </div>
-                ) : (
-                  <p className="trending-showcase-empty">No top rated titles match the current filters.</p>
-                )}
-              </section>
-
-              <section className="trending-showcase recent-showcase desktop-hidden-panel" aria-labelledby="mobile-recently-watched-heading">
-                <div className="trending-showcase-header">
-                  <div>
-                    <p className="trending-showcase-label">Your history</p>
-                    <h2 id="mobile-recently-watched-heading" className="trending-showcase-title">Recently Watched</h2>
-                  </div>
-
-                  <div className="trending-showcase-meta">
-                    <p className="trending-showcase-copy">Jump back into the titles you opened most recently.</p>
-                    {isAuthenticated && (
-                      <div className="trending-showcase-controls" aria-label="Scroll recently watched titles">
-                        <button type="button" className="trending-scroll-button" onClick={() => scrollRow(recentlyWatchedRowRef, 'left')}>
-                          ←
-                        </button>
-                        <button type="button" className="trending-scroll-button" onClick={() => scrollRow(recentlyWatchedRowRef, 'right')}>
-                          →
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {!isAuthenticated ? (
-                  <LockedCollectionState
-                    title="Recently watched is locked"
-                    message="Log in to see your recently watched titles across desktop and mobile."
-                  />
-                ) : isRecentlyWatchedLoading ? (
-                  <div className="trending-showcase-row skeleton-showcase-row">
-                    {renderShowcaseSkeletons(5)}
-                  </div>
-                ) : filteredRecentlyWatchedMovies.length > 0 ? (
-                  <div className="trending-showcase-row" ref={recentlyWatchedRowRef}>
-                    {filteredRecentlyWatchedMovies.map((movie) => (
-                      <MovieCard
-                        key={`mobile-recent-${movie.media_type}-${movie.id}`}
-                        movie={movie}
-                        onWatchTrailer={openTitleDetails}
-                        onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
-                        compact
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="trending-showcase-empty">Open a title to start building your recently watched list.</p>
-                )}
-              </section>
-
-              <section className="trending-showcase favorites-showcase desktop-hidden-panel" aria-labelledby="mobile-favorites-movies-heading">
-                <div className="trending-showcase-header">
-                  <div>
-                    <p className="trending-showcase-label">Your collection</p>
-                    <h2 id="mobile-favorites-movies-heading" className="trending-showcase-title">Favorites & Watchlist</h2>
-                  </div>
-
-                  <div className="trending-showcase-meta">
-                    <p className="trending-showcase-copy">
-                      {selectedGenreIds.length > 0
-                        ? 'Saved movies and shows filtered by your selected genres.'
-                        : 'Keep your go-to picks close for later.'}
-                    </p>
-                    <div className="trending-showcase-controls" aria-label="Scroll favorite titles">
-                      <button type="button" className="trending-scroll-button" onClick={() => scrollRow(favoritesRowRef, 'left')}>
-                        ←
-                      </button>
-                      <button type="button" className="trending-scroll-button" onClick={() => scrollRow(favoritesRowRef, 'right')}>
-                        →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {!isAuthenticated ? (
-                  <LockedCollectionState
-                    title="Favorites are locked"
-                    message="Log in to see your favorites and watchlist on any device."
-                  />
-                ) : isFavoritesLoading ? (
-                  <div className="trending-showcase-row skeleton-showcase-row">
-                    {renderShowcaseSkeletons(5)}
-                  </div>
-                ) : filteredFavoriteMovies.length > 0 ? (
-                  <div className="trending-showcase-row" ref={favoritesRowRef}>
-                    {filteredFavoriteMovies.map((movie) => (
-                      <MovieCard
-                        key={`mobile-favorite-${movie.media_type}-${movie.id}`}
-                        movie={movie}
-                        onWatchTrailer={openTitleDetails}
-                        onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite
-                        isFavoriteLocked={!isAuthenticated}
-                        compact
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="trending-showcase-empty">
-                    {selectedGenreIds.length > 0
-                      ? 'No saved movies or shows match the current genre filter.'
-                      : 'Save titles with the heart button to build your own watchlist.'}
-                  </p>
-                )}
-              </section>
-            </header>
-
-            <section className="all-movies" ref={moviesSectionRef}>
-              <div className="movies-section-heading">
-                <h2 className="mt-[40px]">All {mediaPluralLabel}</h2>
-                {selectedGenreIds.length > 0 && (
-                  <p className="genre-results-copy">Showing {mediaPluralLabel.toLowerCase()} matching your selected genres</p>
-                )}
-              </div>
-
-              <PaginationControls position="top" />
-
-              {errorMessage ? (
-                <p className="text-red-500">{errorMessage}</p>
-              ) : isLoading && movieList.length === 0 ? (
-                <div className="movie-grid-shell">
-                  <div className="movie-grid movie-grid-skeleton">
-                    {renderGridSkeletons()}
-                  </div>
-                </div>
-              ) : movieList.length === 0 ? (
-                <p className="genre-results-copy">No titles found for the current search and genre filters.</p>
-              ) : (
-                <div className="movie-grid-shell">
-                  {isLoading && (
-                    <div className="movie-grid-loading">
-                      <Spinner />
-                    </div>
-                  )}
-
-                  <ul className={isLoading ? 'movie-grid is-loading' : 'movie-grid'}>
-                    {movieList.map((movie) => (
-                      <MovieCard
-                        key={`${movie.media_type}-${movie.id}`}
-                        movie={movie}
-                        onWatchTrailer={openTitleDetails}
-                        onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
-                        isFavoriteLocked={!isAuthenticated}
-                      />
-                    ))}
-                  </ul>
                 </div>
               )}
 
-              {!errorMessage && movieList.length > 0 && <PaginationControls position="bottom" />}
-            </section>
+              {errorMessage && searchTerm.trim().length > 0 ? (
+                <p className="stream-search-message">{errorMessage}</p>
+              ) : isLoading && searchTerm.trim().length >= SEARCH_MIN_LENGTH ? (
+                <p className="stream-search-message">Searching...</p>
+              ) : searchResults.length > 0 ? (
+                <div className="stream-search-results">
+                  {searchResults.slice(0, 8).map((movie) => (
+                    <button
+                      key={`search-${movie.media_type}-${movie.id}`}
+                      type="button"
+                      className="stream-search-result"
+                      onClick={() => {
+                        setIsSearchOpen(false)
+                        openTitleDetails(movie)
+                      }}
+                    >
+                      <img src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')} alt="" />
+                      <span>{movie.title}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="stream-search-message">Type at least 3 characters to find something specific.</p>
+              )}
+            </div>
           </div>
+        )}
 
-          <aside className="desktop-sidebar desktop-sidebar-right">
-            <section className="trending-showcase recent-showcase desktop-favorites-panel" aria-labelledby="recently-watched-heading">
-              <div className="trending-showcase-header desktop-favorites-header">
-                <div>
-                  <p className="trending-showcase-label">Your history</p>
-                  <h2 id="recently-watched-heading" className="trending-showcase-title">Recently Watched</h2>
-                </div>
-
-                <p className="trending-showcase-copy">
-                  Pick up where you left off whenever you come back.
-                </p>
-              </div>
-
-              {!isAuthenticated ? (
-                <LockedCollectionState
-                  title="Recently watched is locked"
-                  message="Log in to unlock your recently watched list and keep it synced."
-                />
-              ) : isRecentlyWatchedLoading ? (
-                <div className="desktop-favorites-list">
-                  {renderShowcaseSkeletons(5)}
-                </div>
-              ) : filteredRecentlyWatchedMovies.length > 0 ? (
-                <div className="desktop-favorites-list custom-scrollbar" ref={recentlyWatchedRowRef}>
-                  {filteredRecentlyWatchedMovies.map((movie) => (
-                    <MovieCard
-                      key={`recent-${movie.media_type}-${movie.id}`}
-                      movie={movie}
-                      onWatchTrailer={openTitleDetails}
-                      onToggleFavorite={toggleFavoriteMovie}
-                      isFavorite={favoriteMovieIds.includes(getMediaItemKey(movie))}
-                      compact
-                    />
-                  ))}
-                </div>
-              ) : (
-                <p className="trending-showcase-empty desktop-favorites-empty">
-                  Open a title to start building your recently watched list.
-                </p>
-              )}
-            </section>
-
-            <section className="trending-showcase favorites-showcase desktop-favorites-panel" aria-labelledby="favorites-movies-heading">
-              <div className="trending-showcase-header desktop-favorites-header">
-                <div>
-                  <p className="trending-showcase-label">Your collection</p>
-                  <h2 id="favorites-movies-heading" className="trending-showcase-title">Favorites & Watchlist</h2>
-                </div>
-
-                <p className="trending-showcase-copy">
-                  {selectedGenreIds.length > 0
-                    ? 'Saved movies and shows filtered by your selected genres.'
-                    : 'Keep your go-to picks close for later.'}
-                </p>
-              </div>
-
-              {!isAuthenticated ? (
-                <LockedCollectionState
-                  title="Favorites are locked"
-                  message="Log in to unlock your favorites and watchlist."
-                />
-              ) : isFavoritesLoading ? (
-                <div className="desktop-favorites-list">
-                  {renderShowcaseSkeletons(5)}
-                </div>
-              ) : filteredFavoriteMovies.length > 0 ? (
-                <div className="desktop-favorites-list custom-scrollbar" ref={favoritesRowRef}>
-                  {filteredFavoriteMovies.map((movie) => (
-                      <MovieCard
-                        key={`favorite-${movie.media_type}-${movie.id}`}
-                        movie={movie}
-                        onWatchTrailer={openTitleDetails}
-                        onToggleFavorite={toggleFavoriteMovie}
-                        isFavorite
-                        isFavoriteLocked={!isAuthenticated}
-                        compact
-                      />
-                    ))}
-                </div>
-              ) : (
-                <p className="trending-showcase-empty desktop-favorites-empty">
-                  {selectedGenreIds.length > 0
-                    ? 'No saved movies or shows match the current genre filter.'
-                    : 'Save titles with the heart button to build your own watchlist.'}
-                </p>
-              )}
-            </section>
-          </aside>
-        </div>
-
-        <footer className="site-footer" aria-label="Site disclaimer and attribution">
-          <div className="site-footer-inner">
-            <p className="site-footer-brand">Movie Browser Demo</p>
-            <p className="site-footer-copy">
-              This website is provided for demonstration and non-production use only. Content, metadata, and imagery are powered by the TMDB API.
-            </p>
-            <p className="site-footer-copy site-footer-copy-muted">
-              TMDB data is used for browsing and discovery. This project is an independent demo experience and is not endorsed by or certified by TMDB.
-            </p>
-            <p className="site-footer-copy site-footer-copy-muted">
-              If you create an account, limited profile-related data such as your authentication record, favorites, and recently watched titles may be stored to provide core features. This information is not displayed publicly, sold, or intentionally shared with other users through the app interface.
-            </p>
-            <p className="site-footer-copy site-footer-copy-muted">
-              Users may request deletion of their stored account-related data at any time. This demo is not legal advice, does not create a formal privacy policy, and should be reviewed and expanded before any production or public commercial use.
-            </p>
-            <div className="site-footer-actions">
-              <button type="button" className="site-footer-action-button" onClick={handleDeletionRequest}>
-                Request data deletion
-              </button>
-            </div>
-            {deletionNotice && (
-              <p className="site-footer-copy site-footer-copy-muted site-footer-notice">{deletionNotice}</p>
+        <section className="stream-hero" aria-label="Featured trailer">
+          <div className="stream-hero-media" style={heroMediaStyle}>
+            {heroTrailerUrl && !isHeroCollapsed && (
+              <iframe
+                className="stream-hero-video"
+                src={heroTrailerUrl}
+                title={`${heroTitle?.title || 'Featured'} trailer`}
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
             )}
           </div>
+
+          <div className="stream-hero-shade" />
+
+          <button
+            type="button"
+            className="stream-hero-cycle is-prev"
+            onClick={() => changeHeroTitle(-1)}
+            aria-label="Previous trending trailer"
+          >
+            ‹
+          </button>
+
+          <button
+            type="button"
+            className="stream-hero-cycle is-next"
+            onClick={() => changeHeroTitle(1)}
+            aria-label="Next trending trailer"
+          >
+            ›
+          </button>
+
+          <div className="stream-hero-content">
+            <p className="stream-hero-kicker">Now rolling</p>
+            <h1>{heroTitle?.title || 'Find your next watch'}</h1>
+            <p className="stream-hero-copy">
+              {heroTitle?.overview || 'Browse cinematic rows of movies and TV shows with a quieter, glassy interface built for discovery.'}
+            </p>
+
+            <div className="stream-hero-actions">
+              <button type="button" className="stream-action-primary" onClick={() => heroTitle && openTitleDetails(heroTitle)}>
+                ▶ Play
+              </button>
+              <button type="button" className="stream-action-secondary" onClick={() => heroTitle && openTitleDetails(heroTitle)}>
+                ● Info
+              </button>
+            </div>
+          </div>
+
+        </section>
+
+        <button
+          type="button"
+          className="stream-hero-toggle"
+          onClick={toggleHeroFocus}
+          aria-label={isHeroCollapsed ? 'Show featured trailer' : 'Show browse rows'}
+          aria-pressed={isHeroCollapsed}
+        >
+          <span aria-hidden="true">{isHeroCollapsed ? '⌃' : '⌄'}</span>
+        </button>
+
+        <section className="stream-belts" aria-label="Browse rows" ref={browseRowsRef}>
+          {heroRows.map((row, index) => (
+            <ContentBelt
+              key={row.id}
+              title={row.title}
+              items={row.items}
+              accent={row.accent}
+              speed={52 + index * 8}
+            />
+          ))}
+
+          {isGenreRowsLoading && (
+            <div className="stream-belt-loading">
+              <Spinner />
+            </div>
+          )}
+
+          {genreRows.map((row) => (
+            <ContentBelt
+              key={`genre-row-${row.id}`}
+              title={`${row.title} ${mediaPluralLabel}`}
+              items={row.items}
+              accent="Genre"
+            />
+          ))}
+        </section>
+
+        <footer className="stream-footer" aria-label="Site disclaimer and attribution">
+          <span>Movie Browser Demo</span>
+          <span>Powered by TMDB data for discovery.</span>
+          <button type="button" onClick={handleDeletionRequest}>Request data deletion</button>
+          {deletionNotice && <span>{deletionNotice}</span>}
         </footer>
       </div>
 
@@ -1551,9 +1861,9 @@ const BrowsePage = () => {
           onClose={closeTitleDetails}
         />
       )}
-
     </AppShell>
   )
+
 }
 
 const App = () => <BrowsePage />

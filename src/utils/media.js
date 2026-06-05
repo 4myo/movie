@@ -78,8 +78,63 @@ export const getTvEpisodeStreamingUrl = (showId, seasonNumber, episodeNumber, pr
 
 export const getStreamingProviders = () => [
   {
+    id: '111movies',
+    name: '111movies',
+    label: '111movies — Default • Ads free',
+    movieUrl: (id) => `https://111movies.com/movie/${id}`,
+    tvEpisodeUrl: (id, season, episode) => `https://111movies.com/tv/${id}/${season}/${episode}`,
+    movieEmbed: (id) => `https://111movies.com/movie/${id}`,
+    movieDetail: (id) => `https://111movies.com/movie/${id}`
+  },
+  {
+    id: 'vidup',
+    name: 'Vidup',
+    label: 'Vidup',
+    movieUrl: (id) => `https://vidup.me/embed/movie/${id}`,
+    tvEpisodeUrl: (id, season, episode) => `https://vidup.me/embed/tv/${id}/${season}/${episode}`,
+    movieEmbed: (id) => `https://vidup.me/embed/movie/${id}`,
+    movieDetail: (id) => `https://vidup.me/embed/movie/${id}`
+  },
+  {
+    id: 'cinezo',
+    name: 'cinezo',
+    label: 'cinezo — Ads free',
+    movieUrl: (id) => `https://player.cinezo.live/embed/movie/${id}?autoplay=true&poster=false&servericon=true&setting=true&pip=true&primarycolor=67d9ff&secondarycolor=111827&iconcolor=ffffff`,
+    tvEpisodeUrl: (id, season, episode) => `https://player.cinezo.live/embed/tv/${id}/${season}/${episode}?autoplay=true&poster=false&servericon=true&setting=true&pip=true&primarycolor=67d9ff&secondarycolor=111827&iconcolor=ffffff`,
+    movieEmbed: (id) => `https://player.cinezo.live/embed/movie/${id}`,
+    movieDetail: (id) => `https://player.cinezo.live/embed/movie/${id}`
+  },
+  {
+    id: 'vidlink',
+    name: 'Vidlink Pro',
+    label: 'Vidlink Pro',
+    movieUrl: (id) => `https://vidlink.pro/movie/${id}?autoplay=true&poster=false&title=true&icons=default`,
+    tvEpisodeUrl: (id, season, episode) => `https://vidlink.pro/tv/${id}/${season}/${episode}?autoplay=true&poster=false&title=true&icons=default`,
+    movieEmbed: (id) => `https://vidlink.pro/movie/${id}`,
+    movieDetail: (id) => `https://vidlink.pro/movie/${id}`
+  },
+  {
+    id: 'videasy',
+    name: 'Videasy',
+    label: 'Videasy',
+    movieUrl: (id) => `https://player.videasy.net/movie/${id}?autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=67d9ff`,
+    tvEpisodeUrl: (id, season, episode) => `https://player.videasy.net/tv/${id}/${season}/${episode}?autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=67d9ff`,
+    movieEmbed: (id) => `https://player.videasy.net/movie/${id}`,
+    movieDetail: (id) => `https://player.videasy.net/movie/${id}`
+  },
+  {
+    id: 'vidsrcxyz',
+    name: 'Vidsrc XYZ',
+    label: 'Vidsrc XYZ',
+    movieUrl: (id) => `https://vidsrc.wiki/embed/movie/${id}?autoplay=1&color=67d9ff`,
+    tvEpisodeUrl: (id, season, episode) => `https://vidsrc.wiki/embed/tv/${id}/${season}/${episode}?autoplay=1&color=67d9ff`,
+    movieEmbed: (id) => `https://vidsrc.wiki/embed/movie/${id}`,
+    movieDetail: (id) => `https://vidsrc.wiki/embed/movie/${id}`
+  },
+  {
     id: 'akcloud',
     name: 'AK Cloud',
+    label: 'AK Cloud',
     movieUrl: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`,
     tvEpisodeUrl: (id, season, episode) => `https://vsembed.ru/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
     movieEmbed: (id) => `https://vsembed.ru/embed/movie?tmdb=${id}`,
@@ -88,6 +143,7 @@ export const getStreamingProviders = () => [
   {
     id: 'megacloud',
     name: 'MEGA Cloud',
+    label: 'MEGA Cloud',
     movieUrl: (id) => `https://moviesapi.to/movie/${id}`,
     tvEpisodeUrl: (id, season, episode) => `https://moviesapi.to/tv/${id}-${season}-${episode}`,
     movieEmbed: (id) => `https://moviesapi.to/movie/${id}`,

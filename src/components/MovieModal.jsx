@@ -1,15 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import MovieCard from './MovieCard.jsx'
+import React, { useEffect, useState } from 'react'
 import { getMediaLabel, getMediaPluralLabel, getStreamingProviders } from '../utils/media.js'
 
 const getMediaItemKey = (item) => `${item?.media_type || 'movie'}-${item?.id ?? ''}`
 
+const imageUrl = (path, size = 'w1280') =>
+  path ? `https://image.tmdb.org/t/p/${size}${path}` : '/hero-bg.png'
+
 const MovieModal = ({
   movie,
   trailerUrl,
+  streamingUrl,
   seasonOptions = [],
-  selectedSeasonNumber = null,
-  selectedEpisodeNumber = null,
+  selectedSeasonNumber,
+  selectedEpisodeNumber,
   episodeOptions = [],
   onSeasonChange,
   onEpisodeChange,
@@ -20,13 +23,12 @@ const MovieModal = ({
   onToggleFavorite,
   favoriteMovieIds = []
 }) => {
-  const [viewMode, setViewMode] = useState('trailer')
-  const [selectedProvider, setSelectedProvider] = useState('akcloud')
-
+  const providers = getStreamingProviders()
+  const [selectedProvider, setSelectedProvider] = useState(providers[0]?.id || '')
+  const [isPlayerOpen, setIsPlayerOpen] = useState(false)
   const mediaLabel = getMediaLabel(movie?.media_type)
   const mediaPluralLabel = getMediaPluralLabel(movie?.media_type)
-  const isTvShow = movie?.media_type === 'tv'
-  const providers = useMemo(() => getStreamingProviders(), [])
+  const isFavorite = favoriteMovieIds.includes(getMediaItemKey(movie))
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow
@@ -43,9 +45,7 @@ const MovieModal = ({
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        onClose()
-      }
+      if (event.key === 'Escape') onClose()
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -55,249 +55,158 @@ const MovieModal = ({
     }
   }, [onClose])
 
-  useEffect(() => {
-    setViewMode('trailer')
-    setSelectedProvider('akcloud')
-  }, [movie?.id, movie?.media_type])
-
-  const currentStreamUrl = useMemo(() => {
-    if (!movie?.id || viewMode !== 'stream') return ''
-
-    const provider = providers.find((item) => item.id === selectedProvider)
-    if (!provider) return ''
-
-    if (isTvShow) {
-      if (!selectedSeasonNumber || !selectedEpisodeNumber) return ''
-      return provider.tvEpisodeUrl(movie.id, selectedSeasonNumber, selectedEpisodeNumber)
-    }
-
-    return provider.movieUrl(movie.id)
-  }, [
-    isTvShow,
-    movie?.id,
-    providers,
-    selectedEpisodeNumber,
-    selectedProvider,
-    selectedSeasonNumber,
-    viewMode
-  ])
-
   if (!movie) return null
 
+  const releaseYear = movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A'
+  const heroImage = imageUrl(movie.backdrop_path || movie.poster_path, movie.backdrop_path ? 'original' : 'w780')
+  const canPlay = Boolean(movie?.id)
+  const isTvShow = movie.media_type === 'tv'
+  const selectedProviderDetails = providers.find((provider) => provider.id === selectedProvider) || providers[0]
+  const playerUrl = !movie?.id || !selectedProviderDetails
+    ? ''
+    : isTvShow
+      ? selectedSeasonNumber && selectedEpisodeNumber
+        ? selectedProviderDetails.tvEpisodeUrl(movie.id, selectedSeasonNumber, selectedEpisodeNumber)
+        : ''
+      : selectedProviderDetails.movieUrl(movie.id)
+
   return (
-    <div className="movie-modal-backdrop" onClick={onClose}>
-      <div className="movie-modal-panel custom-scrollbar" onClick={(event) => event.stopPropagation()}>
-        <div className="movie-modal-inner">
-          <div className="movie-modal-header">
-            <h2 className="movie-modal-title">{movie.title}</h2>
-            <button onClick={onClose} className="movie-modal-close">
-              close
+    <div className="movie-modal-backdrop cinematic-modal-backdrop" onClick={onClose}>
+      <article className="cinematic-title-sheet" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="cinematic-close-button" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+
+        <div className="cinematic-title-hero" style={{ backgroundImage: `url(${heroImage})` }}>
+          <div className="cinematic-title-hero-fade" />
+          <h2 className="cinematic-title-logo">{movie.title}</h2>
+        </div>
+
+        <div className="cinematic-title-body">
+          <div className="cinematic-title-facts">
+            <span>{releaseYear}</span>
+            <span>HD</span>
+            <span>{isTvShow ? `S${selectedSeasonNumber || 1}:E${selectedEpisodeNumber || 1}` : mediaLabel}</span>
+            {movie.vote_average ? <span>{movie.vote_average.toFixed(1)} rating</span> : null}
+          </div>
+
+          <div className="cinematic-title-actions">
+            <button type="button" className="cinematic-play-button" onClick={() => setIsPlayerOpen(true)} disabled={!canPlay}>
+              ▶ Play
+            </button>
+            <button type="button" className="cinematic-round-button" onClick={() => onToggleFavorite?.(movie)} aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}>
+              {isFavorite ? '✓' : '+'}
+            </button>
+            <button type="button" className="cinematic-round-button" onClick={() => trailerUrl && window.open(trailerUrl, '_blank', 'noopener,noreferrer')} disabled={!trailerUrl} aria-label="Open trailer">
+              ⛶
+            </button>
+            <button type="button" className="cinematic-round-button is-glow" onClick={() => setIsPlayerOpen(true)} disabled={!streamingUrl && !canPlay} aria-label="Open player servers">
+              ▣
             </button>
           </div>
 
-          <div className="movie-modal-layout">
-            <div className="movie-modal-poster-column">
-              <div className="movie-modal-poster-shell">
-                <img
-                  src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '/no-movie.png'}
-                  alt={movie.title}
-                  className="movie-modal-poster"
-                />
-              </div>
-            </div>
-
-            <div className="movie-modal-info-column">
-              <div className="movie-modal-summary-card">
-                <div className="movie-modal-title-block">
-                  <p className="movie-modal-kicker">{mediaLabel}</p>
-                  <h3 className="movie-modal-heading-main">{movie.title}</h3>
+          {isPlayerOpen && (
+            <section className="cinematic-player-section" aria-label={`${movie.title} player`}>
+              <div className="cinematic-player-toolbar">
+                <div>
+                  <span>Now playing</span>
+                  <strong>{movie.title}</strong>
                 </div>
-
-                <div className="movie-modal-facts-inline">
-                  <span className="movie-modal-fact-pill">
-                    {movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A'}
-                  </span>
-                  <span className="movie-modal-fact-pill">
-                    {movie.vote_average ? `${movie.vote_average.toFixed(1)} / 10` : 'No rating'}
-                  </span>
-                  <span className="movie-modal-fact-pill">
-                    {movie.runtime ? `${movie.runtime} min` : 'Runtime N/A'}
-                  </span>
-                  <span className="movie-modal-fact-pill">
-                    {movie.original_language ? movie.original_language.toUpperCase() : 'N/A'}
-                  </span>
-                </div>
-
-                {movie.overview && (
-                  <p className="movie-modal-overview movie-modal-overview-compact">{movie.overview}</p>
-                )}
-
+                <button type="button" onClick={() => setIsPlayerOpen(false)}>Close player</button>
               </div>
 
-              <div className="movie-modal-player-block movie-modal-media-section">
-                <div className="movie-modal-switches">
-                  <button
-                    onClick={() => setViewMode('trailer')}
-                    className={`movie-modal-tab ${viewMode === 'trailer' ? 'is-active' : ''}`}
-                  >
-                    Trailer
-                  </button>
-                  <button
-                    onClick={() => setViewMode('stream')}
-                    className={`movie-modal-tab ${viewMode === 'stream' ? 'is-active' : ''}`}
-                  >
-                    Stream {mediaLabel}
-                  </button>
-                </div>
-
-                <h3 className="movie-modal-player-heading">
-                  {viewMode === 'trailer' ? 'Trailer' : `Stream Full ${mediaLabel}`}
-                </h3>
-
-                {viewMode === 'stream' && isTvShow && (
-                  <div className="episode-selector-panel">
-                    <div className="episode-selector-field">
-                      <label htmlFor="season-select" className="episode-selector-label">Season</label>
-                      <select
-                        id="season-select"
-                        className="episode-selector-input"
-                        value={selectedSeasonNumber ?? ''}
-                        onChange={(event) => onSeasonChange?.(Number(event.target.value))}
-                      >
-                        {seasonOptions.map((season) => (
-                          <option key={season.season_number} value={season.season_number}>
-                            {season.name || `Season ${season.season_number}`}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="episode-selector-field">
-                      <label htmlFor="episode-select" className="episode-selector-label">Episode</label>
-                      <select
-                        id="episode-select"
-                        className="episode-selector-input"
-                        value={selectedEpisodeNumber ?? ''}
-                        onChange={(event) => onEpisodeChange?.(Number(event.target.value))}
-                      >
-                        {episodeOptions.map((episode) => (
-                          <option key={episode.episode_number} value={episode.episode_number}>
-                            Episode {episode.episode_number}: {episode.name || 'Untitled'}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                )}
-
-                {viewMode === 'trailer' && trailerUrl && (
-                  <div className="movie-modal-player-frame">
-                    <iframe
-                      src={trailerUrl}
-                      title={`${movie.title} Trailer`}
-                      className="movie-modal-iframe"
-                      loading="lazy"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allow="accelerometer *; autoplay *; clipboard-write *; encrypted-media *; gyroscope *; picture-in-picture *; web-share *; fullscreen *"
-                      allowFullScreen
-                    />
-                  </div>
-                )}
-
-                {viewMode === 'stream' && currentStreamUrl && (
-                  <div className="movie-modal-player-frame">
-                    <iframe
-                      src={currentStreamUrl}
-                      title={`${movie.title} Stream`}
-                      className="movie-modal-iframe"
-                      loading="lazy"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allow="autoplay *; encrypted-media *; picture-in-picture *; web-share *; fullscreen *"
-                      allowFullScreen
-                    />
-                  </div>
-                )}
-
-                {viewMode === 'stream' && (
-                  <div className="movie-modal-streaming-providers">
-                    <h4 className="movie-modal-streaming-title">Select Streaming Server</h4>
-                    <div className="movie-modal-streaming-buttons">
-                      {providers.map((provider) => (
-                        <button
-                          key={provider.id}
-                          type="button"
-                          className={`movie-modal-streaming-button ${selectedProvider === provider.id ? 'is-active' : ''}`}
-                          onClick={() => setSelectedProvider(provider.id)}
-                        >
-                          <span className="movie-modal-streaming-button-label">Server</span>
-                          <span className="movie-modal-streaming-button-name">{provider.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {viewMode === 'trailer' && !trailerUrl && (
-                  <p className="movie-modal-empty-state">Trailer is not available for this title.</p>
-                )}
-
-                {viewMode === 'stream' && !currentStreamUrl && (
-                  <p className="movie-modal-empty-state">
-                    {isTvShow
-                      ? 'Select a season and episode to load the stream.'
-                      : 'Select a streaming server to watch.'}
-                  </p>
-                )}
-              </div>
-
-              <div className="movie-modal-similar-block">
-                <div className="movie-modal-similar-header">
-                  <h3 className="movie-modal-player-heading">Similar {mediaPluralLabel}</h3>
-                  <p className="movie-modal-similar-copy">Keep browsing titles related to this pick.</p>
-                </div>
-
-                {isSimilarLoading ? (
-                  <div className="movie-modal-similar-loading">
-                    <div className="movie-card-skeleton movie-card-skeleton-compact" aria-hidden="true">
-                      <div className="movie-card-skeleton-poster" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-title" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-meta" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-button" />
-                    </div>
-                    <div className="movie-card-skeleton movie-card-skeleton-compact" aria-hidden="true">
-                      <div className="movie-card-skeleton-poster" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-title" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-meta" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-button" />
-                    </div>
-                    <div className="movie-card-skeleton movie-card-skeleton-compact" aria-hidden="true">
-                      <div className="movie-card-skeleton-poster" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-title" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-meta" />
-                      <div className="movie-card-skeleton-line movie-card-skeleton-line-button" />
-                    </div>
-                  </div>
-                ) : similarMovies.length > 0 ? (
-                  <div className="movie-modal-similar-row">
-                    {similarMovies.map((similarMovie) => (
-                      <MovieCard
-                        key={`similar-${similarMovie.media_type || 'movie'}-${similarMovie.id}`}
-                        movie={similarMovie}
-                        onWatchTrailer={onWatchTrailer}
-                        onToggleFavorite={onToggleFavorite}
-                        isFavorite={favoriteMovieIds.includes(getMediaItemKey(similarMovie))}
-                        compact
-                      />
-                    ))}
-                  </div>
+              <div className="cinematic-player-frame">
+                {playerUrl ? (
+                  <iframe
+                    key={playerUrl}
+                    src={playerUrl}
+                    title={`${movie.title} player`}
+                    loading="eager"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allow="autoplay *; encrypted-media *; picture-in-picture *; web-share *"
+                    allowFullScreen
+                  />
                 ) : (
-                  <p className="movie-modal-empty-state">No similar titles are available right now.</p>
+                  <div className="cinematic-player-empty">Select a season and episode to begin playback.</div>
                 )}
               </div>
+
+              <div className="cinematic-server-grid" aria-label="Streaming servers">
+                {providers.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    className={selectedProvider === provider.id ? 'is-active' : ''}
+                    onClick={() => setSelectedProvider(provider.id)}
+                    aria-pressed={selectedProvider === provider.id}
+                  >
+                    {provider.name}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {isTvShow && seasonOptions.length > 0 && (
+            <div className="cinematic-episode-controls">
+              <label>
+                <span>Season</span>
+                <select value={selectedSeasonNumber ?? ''} onChange={(event) => onSeasonChange?.(Number(event.target.value))}>
+                  {seasonOptions.map((season) => (
+                    <option key={season.season_number} value={season.season_number}>
+                      {season.name || `Season ${season.season_number}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span>Episode</span>
+                <select value={selectedEpisodeNumber ?? ''} onChange={(event) => onEpisodeChange?.(Number(event.target.value))}>
+                  {episodeOptions.map((episode) => (
+                    <option key={episode.episode_number} value={episode.episode_number}>
+                      Episode {episode.episode_number}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-          </div>
+          )}
+
+          {movie.overview && <p className="cinematic-title-overview">{movie.overview}</p>}
+
+          <section className="cinematic-similar-section" aria-labelledby="cinematic-similar-title">
+            <div className="cinematic-similar-header">
+              <h3 id="cinematic-similar-title">More like this</h3>
+              <span>{mediaPluralLabel}</span>
+            </div>
+
+            {isSimilarLoading ? (
+              <p className="cinematic-similar-empty">Loading suggestions...</p>
+            ) : similarMovies.length > 0 ? (
+              <div className="cinematic-similar-row">
+                {similarMovies.slice(0, 8).map((similarMovie) => (
+                  <button
+                    key={`similar-${similarMovie.media_type || 'movie'}-${similarMovie.id}`}
+                    type="button"
+                    className="cinematic-similar-card"
+                    onClick={() => onWatchTrailer?.(similarMovie)}
+                  >
+                    <img
+                      src={imageUrl(similarMovie.backdrop_path || similarMovie.poster_path, similarMovie.backdrop_path ? 'w780' : 'w500')}
+                      alt=""
+                      loading="lazy"
+                    />
+                    <span>{similarMovie.title}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="cinematic-similar-empty">No similar titles are available right now.</p>
+            )}
+          </section>
         </div>
-      </div>
+      </article>
     </div>
   )
 }
