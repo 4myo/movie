@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
+import { VideoCameraIcon } from './Icons.jsx'
 import {
   LEGAL_DOCUMENT_VERSION,
-  PRIVACY_PATH,
-  TERMS_PATH
+  privacySections,
+  termsSections
 } from '../utils/legal.js'
 
 const initialFormState = {
@@ -10,7 +11,8 @@ const initialFormState = {
   email: '',
   password: '',
   company: '',
-  legalAccepted: false
+  legalAccepted: false,
+  trustDevice: true
 }
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -34,6 +36,10 @@ const AuthForm = ({
   const [formState, setFormState] = useState(initialFormState)
   const [validationMessage, setValidationMessage] = useState('')
   const [isPasswordVisible, setIsPasswordVisible] = useState(false)
+  const [isLegalModalOpen, setIsLegalModalOpen] = useState(false)
+  const [hasScrolledLegal, setHasScrolledLegal] = useState(false)
+  const legalScrollRef = useRef(null)
+  const legalBottomRef = useRef(null)
 
   const isSignup = mode === 'signup'
   const passwordChecks = useMemo(() => getPasswordChecks(formState.password), [formState.password])
@@ -61,7 +67,8 @@ const AuthForm = ({
       email: normalizeEmail(formState.email),
       password: formState.password,
       legalAccepted: formState.legalAccepted,
-      legalVersion: LEGAL_DOCUMENT_VERSION
+      legalVersion: LEGAL_DOCUMENT_VERSION,
+      trustDevice: formState.trustDevice
     }
 
     if (isSignup && (payload.name.length < 2 || payload.name.length > 80)) {
@@ -103,7 +110,47 @@ const AuthForm = ({
     setFormState(initialFormState)
     setValidationMessage('')
     setIsPasswordVisible(false)
+    setIsLegalModalOpen(false)
+    setHasScrolledLegal(false)
     onModeChange?.(nextMode)
+  }
+
+  const openLegalModal = () => {
+    setHasScrolledLegal(false)
+    setIsLegalModalOpen(true)
+    window.setTimeout(() => {
+      if (legalScrollRef.current) {
+        legalScrollRef.current.scrollTop = 0
+        legalScrollRef.current.focus({ preventScroll: true })
+      }
+    }, 0)
+  }
+
+  const closeLegalModal = () => {
+    setIsLegalModalOpen(false)
+  }
+
+  const handleLegalScroll = (event) => {
+    const target = event.currentTarget
+    const bottomMarker = legalBottomRef.current
+    const isAtBottom = bottomMarker
+      ? bottomMarker.getBoundingClientRect().bottom <= target.getBoundingClientRect().bottom + 24
+      : target.scrollTop + target.clientHeight >= target.scrollHeight - 120
+
+    if (isAtBottom) {
+      setHasScrolledLegal(true)
+    }
+  }
+
+  const acceptLegalTerms = () => {
+    if (!hasScrolledLegal) return
+
+    setFormState((current) => ({
+      ...current,
+      legalAccepted: true
+    }))
+    setValidationMessage('')
+    setIsLegalModalOpen(false)
   }
 
   return (
@@ -205,17 +252,38 @@ const AuthForm = ({
           </div>
         )}
 
+        <label className="auth-trust-device">
+          <input
+            type="checkbox"
+            name="trustDevice"
+            checked={formState.trustDevice}
+            onChange={handleChange}
+          />
+          <span>Trust this device for 30 days</span>
+        </label>
+
         {isSignup && (
           <label className="auth-legal-consent">
             <input
               type="checkbox"
               name="legalAccepted"
               checked={formState.legalAccepted}
-              onChange={handleChange}
+              onChange={(event) => {
+                if (!event.target.checked) {
+                  handleChange(event)
+                  return
+                }
+
+                openLegalModal()
+              }}
               required
             />
             <span>
-              I agree to the <a href={TERMS_PATH}>Terms of Service</a> and <a href={PRIVACY_PATH}>Privacy Policy</a>.
+              {formState.legalAccepted ? 'Terms and Privacy accepted.' : 'Review and accept the Terms of Service and Privacy Policy.'}
+              {' '}
+              <button type="button" onClick={openLegalModal}>
+                {formState.legalAccepted ? 'Review again' : 'Open terms'}
+              </button>
             </span>
           </label>
         )}
@@ -231,6 +299,55 @@ const AuthForm = ({
         </button>
       </form>
 
+      {isSignup && isLegalModalOpen && (
+        <div className="auth-legal-modal-backdrop" role="presentation">
+          <section className="auth-legal-modal" role="dialog" aria-modal="true" aria-labelledby="auth-legal-title">
+            <div className="auth-legal-modal-header">
+              <div>
+                <p>Required review</p>
+                <h3 id="auth-legal-title">Terms & Privacy</h3>
+              </div>
+              <button type="button" onClick={closeLegalModal} aria-label="Close legal review">
+                ×
+              </button>
+            </div>
+
+            <div
+              className="auth-legal-modal-scroll custom-scrollbar"
+              ref={legalScrollRef}
+              onScroll={handleLegalScroll}
+              tabIndex={0}
+            >
+              <h4>Terms of Service</h4>
+              {termsSections.map((section, index) => (
+                <article key={`terms-${section.title}`}>
+                  <h5>{index + 1}. {section.title}</h5>
+                  <p>{section.body}</p>
+                </article>
+              ))}
+
+              <h4>Privacy Policy</h4>
+              {privacySections.map((section, index) => (
+                <article key={`privacy-${section.title}`}>
+                  <h5>{index + 1}. {section.title}</h5>
+                  <p>{section.body}</p>
+                </article>
+              ))}
+              <div className="auth-legal-modal-bottom" ref={legalBottomRef}>
+                End of Terms and Privacy Policy
+              </div>
+            </div>
+
+            <div className="auth-legal-modal-actions">
+              <span>{hasScrolledLegal ? 'Ready to accept' : 'Scroll to the bottom to enable acceptance'}</span>
+              <button type="button" onClick={acceptLegalTerms} disabled={!hasScrolledLegal}>
+                Accept and continue
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
     </section>
   )
 }
@@ -244,8 +361,26 @@ export const AuthPage = ({
 }) => (
   <div className="auth-page-shell">
     <div className="auth-ambient" aria-hidden="true" />
+    <div className="auth-shape auth-shape-one" aria-hidden="true" />
+    <div className="auth-shape auth-shape-two" aria-hidden="true" />
 
     <div className="auth-layout">
+      <section className="auth-welcome-panel" aria-label="Movieslo welcome">
+        <div className="auth-brand-mark">
+          <VideoCameraIcon className="auth-brand-icon" />
+        </div>
+        <p className="auth-brand-kicker">Movieslo</p>
+        <h1>Find your next favorite watch.</h1>
+        <p className="auth-brand-copy">
+          Browse movies and shows, keep your favorites close, and return to titles you were already watching.
+        </p>
+        <div className="auth-brand-points" aria-label="Movieslo highlights">
+          <span>Movie discovery</span>
+          <span>Saved favorites</span>
+          <span>Watch history</span>
+        </div>
+      </section>
+
       <AuthForm
         mode={mode}
         onModeChange={onModeChange}

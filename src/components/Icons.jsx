@@ -32,6 +32,14 @@ export const ClapperboardIcon = (props) => (
   </SvgIcon>
 )
 
+export const VideoCameraIcon = (props) => (
+  <SvgIcon {...props}>
+    <rect x="3" y="7" width="13" height="10" rx="3" />
+    <path d="m16 10 6-3v10l-6-3" />
+    <path d="M7.5 11.5h3" />
+  </SvgIcon>
+)
+
 export const TvIcon = (props) => (
   <SvgIcon {...props}>
     <rect x="3" y="5" width="18" height="12" rx="2" />

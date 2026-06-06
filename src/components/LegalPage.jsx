@@ -1,6 +1,5 @@
 import {
   LEGAL_DOCUMENT_VERSION,
-  legalDisclaimer,
   privacySections,
   termsSections
 } from '../utils/legal.js'
@@ -30,10 +29,6 @@ const LegalPage = ({ type = 'terms', onBackHome }) => {
           <p>{document.eyebrow}</p>
           <h1 id="legal-page-title">{document.title}</h1>
           <span>Version {LEGAL_DOCUMENT_VERSION}</span>
-        </div>
-
-        <div className="legal-disclaimer" role="note">
-          {legalDisclaimer}
         </div>
 
         <p className="legal-intro">{document.intro}</p>

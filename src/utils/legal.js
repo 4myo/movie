@@ -2,9 +2,6 @@ export const LEGAL_DOCUMENT_VERSION = 'movieslo-legal-2026-06-06'
 export const TERMS_PATH = '/terms'
 export const PRIVACY_PATH = '/privacy'
 
-export const legalDisclaimer =
-  'This document is a template generated for informational purposes only and does not constitute legal advice. You should consult a qualified lawyer before using it in a real product or with real users, adult data, minor data, or legally protected content.'
-
 export const termsSections = [
   {
     title: 'Introduction',
@@ -88,11 +85,11 @@ export const termsSections = [
   },
   {
     title: 'Governing Law',
-    body: 'These terms are governed by the laws of [Country/Jurisdiction], unless mandatory law says otherwise.'
+    body: 'These terms are governed by the laws of Slovakia, unless mandatory law says otherwise.'
   },
   {
     title: 'Contact',
-    body: 'Contact: [Your Name or Company Name], [Contact Email], [Address if needed]. Effective date: [Effective Date].'
+    body: 'Contact: Matthew, replikeslo@outlook.com, Slovakia. Effective date: June 6, 2026.'
   }
 ]
 
@@ -106,8 +103,8 @@ export const privacySections = [
     body: 'Movieslo is a prototype/demo application and should not be used to store real sensitive personal data, production user data, children data, payment data, or confidential data unless proper legal, security, and compliance measures are in place.'
   },
   {
-    title: 'Data Controller Placeholder',
-    body: 'Data controller: [Your Name or Company Name], [Contact Email], [Country/Jurisdiction].'
+    title: 'Data Controller',
+    body: 'Data controller: Matthew, replikeslo@outlook.com, Slovakia.'
   },
   {
     title: 'Data Collected',
@@ -130,7 +127,7 @@ export const privacySections = [
     body: 'Data may be used for account creation and login, saving favorites and watchlists, showing recommendations, displaying ratings and reviews, improving app features, preventing abuse, debugging and security, legal compliance, and responding to user requests.'
   },
   {
-    title: 'Legal Basis Placeholder',
+    title: 'Legal Basis',
     body: 'For GDPR-style jurisdictions, possible legal bases may include consent, contract, legitimate interests, legal obligation, and protection of rights and security.'
   },
   {
@@ -187,6 +184,6 @@ export const privacySections = [
   },
   {
     title: 'Contact Information',
-    body: 'Contact: [Your Name or Company Name], [Contact Email], [Country/Jurisdiction]. Effective date: [Effective Date].'
+    body: 'Contact: Matthew, replikeslo@outlook.com, Slovakia. Effective date: June 6, 2026.'
   }
 ]

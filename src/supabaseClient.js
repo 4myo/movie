@@ -4,18 +4,18 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 const AUTH_STORAGE_KEY = 'movie-browser-auth-v2'
 
-const sessionStorageAdapter = {
+const localStorageAdapter = {
   getItem: (key) => {
     if (typeof window === 'undefined') return null
-    return window.sessionStorage.getItem(key)
+    return window.localStorage.getItem(key)
   },
   setItem: (key, value) => {
     if (typeof window === 'undefined') return
-    window.sessionStorage.setItem(key, value)
+    window.localStorage.setItem(key, value)
   },
   removeItem: (key) => {
     if (typeof window === 'undefined') return
-    window.sessionStorage.removeItem(key)
+    window.localStorage.removeItem(key)
   }
 }
 
@@ -25,7 +25,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
     autoRefreshToken: true,
     detectSessionInUrl: true,
     flowType: 'pkce',
-    storage: sessionStorageAdapter,
+    storage: localStorageAdapter,
     storageKey: AUTH_STORAGE_KEY
   }
 })

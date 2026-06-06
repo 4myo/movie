@@ -6,12 +6,12 @@ import MovieModal from './components/MovieModal.jsx'
 import { AuthPage } from './components/AuthModal.jsx'
 import LegalPage from './components/LegalPage.jsx'
 import {
-  ClapperboardIcon,
   HomeIcon,
   LogInIcon,
   LogOutIcon,
   SearchIcon,
-  TvIcon
+  TvIcon,
+  VideoCameraIcon
 } from './components/Icons.jsx'
 import { supabase } from './supabaseClient.js'
 import {
@@ -157,6 +157,37 @@ const appendUniqueMediaItems = (currentItems, incomingItems) => {
   return [...currentItems, ...uniqueIncomingItems]
 }
 
+const getWatchedAtTime = (item) => {
+  const watchedAt = item?.watched_at || item?.updated_at || item?.created_at
+  const watchedAtTime = Date.parse(watchedAt || '')
+  return Number.isFinite(watchedAtTime) ? watchedAtTime : 0
+}
+
+const sortWatchHistoryItems = (items) =>
+  [...items].sort((firstItem, secondItem) => {
+    const timeDifference = getWatchedAtTime(secondItem) - getWatchedAtTime(firstItem)
+    if (timeDifference !== 0) return timeDifference
+
+    return getMediaItemKey(secondItem).localeCompare(getMediaItemKey(firstItem))
+  })
+
+const mergeWatchHistoryItems = (...itemGroups) => {
+  const itemMap = new Map()
+
+  itemGroups.flat().forEach((item) => {
+    if (!item?.id) return
+
+    const itemKey = getMediaItemKey(item)
+    const existingItem = itemMap.get(itemKey)
+
+    if (!existingItem || getWatchedAtTime(item) >= getWatchedAtTime(existingItem)) {
+      itemMap.set(itemKey, item)
+    }
+  })
+
+  return sortWatchHistoryItems([...itemMap.values()])
+}
+
 const getLocalWatchHistoryKey = (userId) => `${WATCH_HISTORY_STORAGE_PREFIX}${userId}`
 
 const getLocalWatchHistory = (userId) => {
@@ -184,8 +215,12 @@ const upsertLocalWatchHistoryItem = (userId, movie) => {
   if (!userId) return []
 
   const movieKey = getMediaItemKey(movie)
+  const watchHistoryItem = {
+    ...movie,
+    watched_at: movie?.watched_at || new Date().toISOString()
+  }
   const nextItems = [
-    movie,
+    watchHistoryItem,
     ...getLocalWatchHistory(userId).filter((entry) => getMediaItemKey(entry) !== movieKey)
   ].slice(0, 12)
 
@@ -596,17 +631,15 @@ const AppShell = ({ children, className = '' }) => (
 )
 
 const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorMessage }) => (
-  <AppShell className="auth-main">
-    <div className="wrapper auth-route-wrapper">
-      <AuthPage
-        mode={mode}
-        onModeChange={onModeChange}
-        onSubmit={onSubmit}
-        isSubmitting={isSubmitting}
-        errorMessage={errorMessage}
-      />
-    </div>
-  </AppShell>
+  <main className="auth-main">
+    <AuthPage
+      mode={mode}
+      onModeChange={onModeChange}
+      onSubmit={onSubmit}
+      isSubmitting={isSubmitting}
+      errorMessage={errorMessage}
+    />
+  </main>
 )
 
 const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle }) {
@@ -1662,14 +1695,14 @@ const BrowsePage = () => {
       const data = await authApi.getRecentlyWatched(authUser.id)
       const remoteItems = (data?.items || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
       const localItems = getLocalWatchHistory(authUser.id).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
-      const mergedItems = appendUniqueMediaItems(localItems, remoteItems)
-        .sort((a, b) => new Date(b.watched_at || 0) - new Date(a.watched_at || 0))
+      const mergedItems = mergeWatchHistoryItems(remoteItems, localItems)
 
+      setLocalWatchHistory(authUser.id, mergedItems)
       setRecentlyWatchedMovies(enrichMoviesWithRuntime(mergedItems.slice(0, 12)))
     } catch (error) {
       console.log(`Error loading recently watched titles: ${error}`)
       const localItems = getLocalWatchHistory(authUser.id).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
-      setRecentlyWatchedMovies(enrichMoviesWithRuntime(localItems))
+      setRecentlyWatchedMovies(enrichMoviesWithRuntime(sortWatchHistoryItems(localItems)))
     } finally {
       setIsRecentlyWatchedLoading(false)
     }
@@ -1723,7 +1756,10 @@ const BrowsePage = () => {
       })
 
       setRecentlyWatchedMovies((currentMovies) => {
-        const normalizedMovie = normalizeMediaItem(movie, movie.media_type || 'movie')
+        const normalizedMovie = normalizeMediaItem({
+          ...movie,
+          watched_at: new Date().toISOString()
+        }, movie.media_type || 'movie')
         const normalizedMovieKey = getMediaItemKey(normalizedMovie)
         const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== normalizedMovieKey)
         return [normalizedMovie, ...withoutMovie].slice(0, 12)
@@ -1739,7 +1775,7 @@ const BrowsePage = () => {
 
     setRecentlyWatchedMovies((currentMovies) => {
       const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== normalizedMovieKey)
-      return [normalizedMovie, ...withoutMovie].slice(0, 12)
+      return sortWatchHistoryItems([normalizedMovie, ...withoutMovie]).slice(0, 12)
     })
   }, [])
 
@@ -2427,7 +2463,7 @@ const BrowsePage = () => {
             className={`stream-nav-item ${mediaFilter === 'movie' ? 'is-active-soft' : ''}`}
             onClick={() => setMediaFilter('movie')}
           >
-            <ClapperboardIcon className="stream-nav-svg" />
+            <VideoCameraIcon className="stream-nav-svg" />
             <span className="stream-nav-label">Movies</span>
           </button>
 

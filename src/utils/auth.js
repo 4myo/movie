@@ -3,6 +3,8 @@ import { LEGAL_DOCUMENT_VERSION } from './legal.js'
 
 const FAVORITES_TABLE = 'favorite_movies'
 const RECENTLY_WATCHED_TABLE = 'recently_watched'
+const TRUSTED_DEVICE_STORAGE_KEY = 'movieslo-trusted-device-v1'
+const TRUSTED_DEVICE_DURATION_MS = 30 * 24 * 60 * 60 * 1000
 const getStoredMediaType = (movie) => (movie?.media_type === 'tv' ? 'tv' : 'movie')
 const getStoredMovieId = (movie) => {
   const movieId = Number(movie?.id)
@@ -15,6 +17,71 @@ const getStoredMovieId = (movie) => {
 }
 const normalizeEmail = (email = '') => email.trim().toLowerCase()
 const sanitizeDisplayName = (name = '') => name.trim().replace(/\s+/g, ' ').slice(0, 80)
+const getDeviceType = () => {
+  if (typeof window === 'undefined') return 'unknown'
+
+  const userAgent = window.navigator.userAgent || ''
+  if (/Mobi|Android|iPhone|iPad|iPod/i.test(userAgent)) return 'mobile'
+  return 'desktop'
+}
+
+const getTrustedDeviceRecord = () => {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const rawRecord = window.localStorage.getItem(TRUSTED_DEVICE_STORAGE_KEY)
+    return rawRecord ? JSON.parse(rawRecord) : null
+  } catch {
+    return null
+  }
+}
+
+const createDeviceToken = () => {
+  if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID()
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+const rememberTrustedDevice = (userId) => {
+  if (typeof window === 'undefined' || !userId) return
+
+  const now = Date.now()
+  const deviceToken = createDeviceToken()
+  const record = {
+    user_id: userId,
+    device_token: deviceToken,
+    device_type: getDeviceType(),
+    issued_at: new Date(now).toISOString(),
+    expires_at: new Date(now + TRUSTED_DEVICE_DURATION_MS).toISOString()
+  }
+
+  try {
+    window.localStorage.setItem(TRUSTED_DEVICE_STORAGE_KEY, JSON.stringify(record))
+  } catch {
+    // Supabase still owns the real session; this only controls the local 30-day trust window.
+  }
+}
+
+const clearTrustedDevice = () => {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.removeItem(TRUSTED_DEVICE_STORAGE_KEY)
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+const isTrustedDeviceSessionValid = (userId) => {
+  const record = getTrustedDeviceRecord()
+  if (!record?.user_id || record.user_id !== userId) return false
+  if (record.device_type !== getDeviceType()) return false
+
+  const expiresAt = Date.parse(record.expires_at || '')
+  return Number.isFinite(expiresAt) && expiresAt > Date.now()
+}
 
 const requireVerifiedUser = async (expectedUserId) => {
   const { data, error } = await supabase.auth.getUser()
@@ -40,9 +107,18 @@ const clearLocalSessionArtifacts = () => {
   } catch {
     // Storage can be unavailable in privacy modes; Supabase signOut still invalidates the session.
   }
+
+  clearTrustedDevice()
 }
 
 export const authApi = {
+  isTrustedDeviceSessionActive: (userId) => isTrustedDeviceSessionValid(userId),
+
+  rememberCurrentDevice: (userId) => {
+    rememberTrustedDevice(userId)
+    return { success: true }
+  },
+
   me: async () => {
     const { data, error } = await supabase.auth.getUser()
 
@@ -50,10 +126,16 @@ export const authApi = {
       throw new Error(error.message)
     }
 
+    if (data.user?.id && !isTrustedDeviceSessionValid(data.user.id)) {
+      await supabase.auth.signOut()
+      clearLocalSessionArtifacts()
+      throw new Error('Session expired. Please log in again.')
+    }
+
     return { user: data.user }
   },
 
-  signup: async ({ name, email, password, legalAccepted, legalVersion }) => {
+  signup: async ({ name, email, password, legalAccepted, legalVersion, trustDevice = true }) => {
     const safeName = sanitizeDisplayName(name)
     const safeEmail = normalizeEmail(email)
 
@@ -83,10 +165,14 @@ export const authApi = {
       throw new Error(error.message)
     }
 
+    if (data.user?.id && trustDevice) {
+      rememberTrustedDevice(data.user.id)
+    }
+
     return { user: data.user }
   },
 
-  login: async ({ email, password }) => {
+  login: async ({ email, password, trustDevice = true }) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email: normalizeEmail(email),
       password
@@ -96,8 +182,17 @@ export const authApi = {
       throw new Error(error.message)
     }
 
-    const verifiedUser = await requireVerifiedUser(data.user?.id)
-    return { user: verifiedUser }
+    if (!data?.session?.access_token || !data?.user?.id) {
+      throw new Error('Could not create a login session. Please try again.')
+    }
+
+    if (trustDevice) {
+      rememberTrustedDevice(data.user.id)
+    } else {
+      clearTrustedDevice()
+    }
+
+    return { user: data.user }
   },
 
   logout: async () => {
@@ -205,9 +300,10 @@ export const authApi = {
     const verifiedUser = await requireVerifiedUser(userId)
     const { data, error } = await supabase
       .from(RECENTLY_WATCHED_TABLE)
-      .select('movie_data, watched_at')
+      .select('id, movie_data, watched_at, updated_at')
       .eq('user_id', verifiedUser.id)
       .order('watched_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(12)
 
     if (error) {
@@ -217,7 +313,9 @@ export const authApi = {
     return {
       items: (data || []).map((entry) => ({
         ...entry.movie_data,
-        watched_at: entry.movie_data?.watched_at || entry.watched_at
+        recently_watched_id: entry.id,
+        watched_at: entry.movie_data?.watched_at || entry.watched_at,
+        updated_at: entry.movie_data?.updated_at || entry.updated_at
       }))
     }
   },
