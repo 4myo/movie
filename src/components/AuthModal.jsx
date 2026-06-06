@@ -1,10 +1,16 @@
 import React, { useMemo, useState } from 'react'
+import {
+  LEGAL_DOCUMENT_VERSION,
+  PRIVACY_PATH,
+  TERMS_PATH
+} from '../utils/legal.js'
 
 const initialFormState = {
   name: '',
   email: '',
   password: '',
-  company: ''
+  company: '',
+  legalAccepted: false
 }
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -35,10 +41,10 @@ const AuthForm = ({
   const title = isSignup ? 'Sign up' : 'Log in'
 
   const handleChange = (event) => {
-    const { name, value } = event.target
+    const { checked, name, type, value } = event.target
     setFormState((current) => ({
       ...current,
-      [name]: value
+      [name]: type === 'checkbox' ? checked : value
     }))
   }
 
@@ -53,7 +59,9 @@ const AuthForm = ({
     const payload = {
       name: normalizeName(formState.name),
       email: normalizeEmail(formState.email),
-      password: formState.password
+      password: formState.password,
+      legalAccepted: formState.legalAccepted,
+      legalVersion: LEGAL_DOCUMENT_VERSION
     }
 
     if (isSignup && (payload.name.length < 2 || payload.name.length > 80)) {
@@ -73,6 +81,11 @@ const AuthForm = ({
 
     if (isSignup && passedPasswordChecks < 3) {
       setValidationMessage('Use a stronger password before creating the account.')
+      return
+    }
+
+    if (isSignup && !payload.legalAccepted) {
+      setValidationMessage('Accept the Terms of Service and Privacy Policy before creating the account.')
       return
     }
 
@@ -190,6 +203,21 @@ const AuthForm = ({
               ))}
             </div>
           </div>
+        )}
+
+        {isSignup && (
+          <label className="auth-legal-consent">
+            <input
+              type="checkbox"
+              name="legalAccepted"
+              checked={formState.legalAccepted}
+              onChange={handleChange}
+              required
+            />
+            <span>
+              I agree to the <a href={TERMS_PATH}>Terms of Service</a> and <a href={PRIVACY_PATH}>Privacy Policy</a>.
+            </span>
+          </label>
         )}
 
         {(validationMessage || errorMessage) && (

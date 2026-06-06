@@ -1,5 +1,12 @@
 import React, { useEffect } from 'react'
 import {
+  FilmIcon,
+  HeartFilledIcon,
+  HeartIcon,
+  MonitorPlayIcon,
+  PlayIcon
+} from './Icons.jsx'
+import {
   getMediaLabel,
   getMediaPluralLabel
 } from '../utils/media.js'
@@ -12,7 +19,6 @@ const imageUrl = (path, size = 'w1280') =>
 const MovieModal = ({
   movie,
   trailerUrl,
-  streamingUrl,
   seasonOptions = [],
   selectedSeasonNumber,
   selectedEpisodeNumber,
@@ -95,7 +101,8 @@ const MovieModal = ({
 
           <div className="cinematic-title-actions">
             <button type="button" className="cinematic-play-button" onClick={handlePlayTitle} disabled={!canPlay}>
-              ▶ Play
+              <PlayIcon className="cinematic-play-icon" />
+              <span>Play</span>
             </button>
 
             <button
@@ -105,7 +112,13 @@ const MovieModal = ({
               aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
               title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
             >
-              <span className="cinematic-round-button" aria-hidden="true">{isFavorite ? '✓' : '+'}</span>
+              <span className="cinematic-round-button" aria-hidden="true">
+                {isFavorite ? (
+                  <HeartFilledIcon className="cinematic-action-icon" />
+                ) : (
+                  <HeartIcon className="cinematic-action-icon" />
+                )}
+              </span>
               <span className="cinematic-action-label">{isFavorite ? 'Saved' : 'Favorite'}</span>
             </button>
 
@@ -117,7 +130,9 @@ const MovieModal = ({
               aria-label="Open trailer"
               title="Open trailer"
             >
-              <span className="cinematic-round-button" aria-hidden="true">⛶</span>
+              <span className="cinematic-round-button" aria-hidden="true">
+                <FilmIcon className="cinematic-action-icon" />
+              </span>
               <span className="cinematic-action-label">Trailer</span>
             </button>
 
@@ -129,7 +144,9 @@ const MovieModal = ({
               aria-label="Open player"
               title="Open player"
             >
-              <span className="cinematic-round-button is-glow" aria-hidden="true">▣</span>
+              <span className="cinematic-round-button is-glow" aria-hidden="true">
+                <MonitorPlayIcon className="cinematic-action-icon" />
+              </span>
               <span className="cinematic-action-label">Player</span>
             </button>
           </div>
@@ -183,6 +200,7 @@ const MovieModal = ({
                       src={imageUrl(similarMovie.backdrop_path || similarMovie.poster_path, similarMovie.backdrop_path ? 'w780' : 'w500')}
                       alt=""
                       loading="lazy"
+                      decoding="async"
                     />
                     <span>{similarMovie.title}</span>
                   </button>

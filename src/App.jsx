@@ -4,6 +4,15 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Spinner from './components/Spinner.jsx'
 import MovieModal from './components/MovieModal.jsx'
 import { AuthPage } from './components/AuthModal.jsx'
+import LegalPage from './components/LegalPage.jsx'
+import {
+  ClapperboardIcon,
+  HomeIcon,
+  LogInIcon,
+  LogOutIcon,
+  SearchIcon,
+  TvIcon
+} from './components/Icons.jsx'
 import { supabase } from './supabaseClient.js'
 import {
   DEFAULT_STREAMING_PROVIDER_ID,
@@ -17,6 +26,10 @@ import {
   normalizeMediaItem,
   normalizeMediaList
 } from './utils/media.js'
+import {
+  PRIVACY_PATH,
+  TERMS_PATH
+} from './utils/legal.js'
 import { authApi } from './utils/auth.js'
 
 const API_BASE_URL = 'https://api.themoviedb.org/3'
@@ -42,6 +55,7 @@ const PERSISTENT_CACHE_KEYS = [
   'top-rated:',
   'trending:'
 ]
+const COOKIE_NOTICE_STORAGE_KEY = 'movieslo-cookie-notice-v1'
 const responseCache = new Map()
 const MOVIE_BELT_GENRES = [
   'Action',
@@ -188,9 +202,36 @@ const getBackdropUrl = (item, size = 'w1280') => {
 const getPosterUrl = (item, size = 'w500') =>
   item?.poster_path ? `${imageBaseUrl}${size}${item.poster_path}` : '/no-movie.png'
 
+const HERO_VIDEO_BLOCKLIST_PATTERN = /\b(shorts?|vertical|portrait|reel|tiktok|phone)\b/i
+
+const getHeroVideoScore = (video) => {
+  if (!video || video.site !== 'YouTube' || !['Trailer', 'Teaser'].includes(video.type)) return -Infinity
+
+  const videoName = video.name || ''
+  if (HERO_VIDEO_BLOCKLIST_PATTERN.test(videoName)) return -Infinity
+
+  let score = 0
+  if (video.type === 'Trailer') score += 100
+  if (video.official) score += 55
+  if (/official/i.test(videoName)) score += 25
+  if (/trailer/i.test(videoName)) score += 20
+  if (/teaser/i.test(videoName)) score -= 12
+  score += Math.min(Number(video.size || 0) / 120, 12)
+
+  return score
+}
+
+const getBestHeroVideo = (videos = []) =>
+  videos
+    .map((video) => ({ video, score: getHeroVideoScore(video) }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort((first, second) => second.score - first.score)[0]?.video || null
+
 const getHeroTrailerEmbedUrl = (videoKey) =>
   videoKey
-    ? `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&loop=1&playlist=${videoKey}&rel=0&modestbranding=1&playsinline=1&enablejsapi=1`
+    ? `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3${
+        typeof window === 'undefined' ? '' : `&origin=${encodeURIComponent(window.location.origin)}`
+      }`
     : ''
 
 const shouldPersistCacheKey = (key) => PERSISTENT_CACHE_KEYS.some((prefix) => key.startsWith(prefix))
@@ -496,7 +537,7 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
   if (isLoading) {
     return (
       <div className="details-loading-shell">
-        <Spinner />
+        <Spinner label="Loading title" />
       </div>
     )
   }
@@ -568,36 +609,38 @@ const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorM
   </AppShell>
 )
 
-const BeltCard = ({ movie, index = 0, onOpenTitle }) => (
-  <article
-    className="belt-card"
-    onClick={() => onOpenTitle(movie)}
-    onKeyDown={(event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault()
-        onOpenTitle(movie)
-      }
-    }}
-    role="button"
-    tabIndex={0}
-    aria-label={`Open ${movie.title}`}
-    style={{ '--card-index': index }}
-  >
-    <div className="belt-card-image-shell">
-      <img
-        className="belt-card-image"
-        src={movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)}
-        alt={movie.title}
-        loading={index < 4 ? 'eager' : 'lazy'}
-        decoding="async"
-        fetchPriority={index < 4 ? 'high' : 'auto'}
-      />
-    </div>
-    <h3 className="belt-card-title">{movie.title}</h3>
-  </article>
-)
+const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle }) {
+  return (
+    <article
+      className="belt-card"
+      onClick={() => onOpenTitle(movie)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpenTitle(movie)
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${movie.title}`}
+      style={{ '--card-index': index }}
+    >
+      <div className="belt-card-image-shell">
+        <img
+          className="belt-card-image"
+          src={movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)}
+          alt={movie.title}
+          loading={index < 4 ? 'eager' : 'lazy'}
+          decoding="async"
+          fetchPriority={index < 4 ? 'high' : 'auto'}
+        />
+      </div>
+      <h3 className="belt-card-title">{movie.title}</h3>
+    </article>
+  )
+})
 
-const ContentBelt = ({
+const ContentBelt = React.memo(function ContentBelt({
   title,
   items = [],
   accent = '',
@@ -610,7 +653,7 @@ const ContentBelt = ({
   setLoadingMoreBeltKeys,
   exhaustedBeltKeys,
   setExhaustedBeltKeys
-}) => {
+}) {
   const beltRef = useRef(null)
   const resolvedBeltKey = beltKey || title
   const visibleCount = beltVisibleCounts[resolvedBeltKey] || INITIAL_BELT_ITEM_COUNT
@@ -701,7 +744,7 @@ const ContentBelt = ({
       </div>
     </section>
   )
-}
+})
 
 const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
   const navigate = useNavigate()
@@ -880,11 +923,13 @@ const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
     const tickId = window.setInterval(getProgressMovie, 1000)
     const saveId = window.setInterval(writeProgress, 5000)
     const writeFinalProgress = () => writeProgress({ forceRemote: true, updateTimer: false })
+    window.addEventListener('pagehide', writeFinalProgress)
     window.addEventListener('beforeunload', writeFinalProgress)
 
     return () => {
       window.clearInterval(tickId)
       window.clearInterval(saveId)
+      window.removeEventListener('pagehide', writeFinalProgress)
       window.removeEventListener('beforeunload', writeFinalProgress)
       writeFinalProgress()
     }
@@ -900,7 +945,7 @@ const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
     return (
       <AppShell>
         <div className="watch-loader-state">
-          <Spinner />
+          <Spinner label="Loading player" />
         </div>
       </AppShell>
     )
@@ -1044,6 +1089,11 @@ const BrowsePage = () => {
   const detailMatch = location.pathname.match(/^\/title\/(movie|tv)\/(\d+)$/)
   const watchMatch = location.pathname.match(/^\/watch\/(movie|tv)\/(\d+)$/)
   const authMatch = location.pathname.match(/^\/account\/(login|signup)$/)
+  const legalDocumentType = location.pathname === TERMS_PATH
+    ? 'terms'
+    : location.pathname === PRIVACY_PATH
+      ? 'privacy'
+      : null
   const activeDetailMediaType = detailMatch?.[1] || null
   const activeDetailId = detailMatch?.[2] || null
   const activeWatchMediaType = watchMatch?.[1] || null
@@ -1061,6 +1111,7 @@ const BrowsePage = () => {
   const [heroTitle, setHeroTitle] = useState(null)
   const [heroTrailerUrl, setHeroTrailerUrl] = useState('')
   const [heroIndex, setHeroIndex] = useState(0)
+  const [heroQueueMode, setHeroQueueMode] = useState('trending')
   const [isHeroCollapsed, setIsHeroCollapsed] = useState(false)
   const [heroVolume, setHeroVolume] = useState(0.25)
   const [isHeroMuted, setIsHeroMuted] = useState(false)
@@ -1086,6 +1137,10 @@ const BrowsePage = () => {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [authErrorMessage, setAuthErrorMessage] = useState('')
   const [deletionNotice, setDeletionNotice] = useState('')
+  const [hasAcceptedCookieNotice, setHasAcceptedCookieNotice] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem(COOKIE_NOTICE_STORAGE_KEY) === 'accepted'
+  })
   const moviesSectionRef = useRef(null)
   const browseRowsRef = useRef(null)
   const _trendingRowRef = useRef(null)
@@ -1127,6 +1182,12 @@ const BrowsePage = () => {
     () => favoriteMovies.map((movie) => getMediaItemKey(movie)),
     [favoriteMovies]
   )
+  const heroQueueItems = useMemo(() => {
+    const selectedQueue = heroQueueMode === 'popular' ? movieList : trendingMovies
+    const fallbackQueue = selectedQueue.length > 0 ? selectedQueue : trendingMovies
+
+    return fallbackQueue.filter((movie) => movie.backdrop_path || movie.poster_path)
+  }, [heroQueueMode, movieList, trendingMovies])
 
   const isAuthenticated = Boolean(authUser)
   const authMode = authMatch?.[1] === 'signup' ? 'signup' : 'login'
@@ -1166,6 +1227,7 @@ const BrowsePage = () => {
     const nextVolume = clampNumber(Number(event.target.value), 0, 1)
     setHeroVolume(nextVolume)
     setIsHeroMuted(nextVolume <= 0)
+
     sendHeroVideoCommand('setVolume', [Math.round(nextVolume * 100)])
     sendHeroVideoCommand(nextVolume <= 0 ? 'mute' : 'unMute')
     sendHeroVideoCommand('playVideo')
@@ -1654,7 +1716,7 @@ const BrowsePage = () => {
     }
   }
 
-  const openTitleDetails = (movie) => {
+  const openTitleDetails = useCallback((movie) => {
     if (isAuthenticated) {
       authApi.trackRecentlyWatched(authUser.id, movie).catch((error) => {
         console.log(`Error tracking recently watched title: ${error}`)
@@ -1669,7 +1731,7 @@ const BrowsePage = () => {
     }
 
     navigate(getDetailPath(movie), { state: { backgroundLocation: location } })
-  }
+  }, [authUser?.id, isAuthenticated, location, navigate])
 
   const handleWatchProgress = useCallback((movie) => {
     const normalizedMovie = normalizeMediaItem(movie, movie.media_type || 'movie')
@@ -1681,14 +1743,14 @@ const BrowsePage = () => {
     })
   }, [])
 
-  const playTitle = (movie, resumeTimeSeconds = 0) => {
+  const playTitle = useCallback((movie, resumeTimeSeconds = 0) => {
     if (!movie?.id) return
     navigate(getWatchPath(movie, resumeTimeSeconds))
-  }
+  }, [navigate])
 
-  const playHistoryItem = (movie) => {
+  const playHistoryItem = useCallback((movie) => {
     playTitle(movie, getResumeTimeSeconds(movie))
-  }
+  }, [playTitle])
 
   const removeHistoryItem = async (movie) => {
     if (!isAuthenticated) {
@@ -1896,6 +1958,7 @@ const BrowsePage = () => {
   useEffect(() => {
     loadFavoriteMovies()
     loadRecentlyWatched()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated])
 
   useEffect(() => {
@@ -1909,11 +1972,13 @@ const BrowsePage = () => {
     fetchTrendingTitles(mediaFilter)
     fetchTopRatedTitles(selectedGenreIds, mediaFilter)
     topRatedRowRef.current?.scrollTo({ left: 0, behavior: 'smooth' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaFilter])
 
   useEffect(() => {
     fetchTopRatedTitles(selectedGenreIds, mediaFilter)
     topRatedRowRef.current?.scrollTo({ left: 0, behavior: 'smooth' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedGenreIds])
 
   useEffect(() => {
@@ -1922,12 +1987,14 @@ const BrowsePage = () => {
 
   useEffect(() => {
     const scrollTarget = window.setTimeout(() => {
+      const scrollBehavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+
       if (isHeroCollapsed) {
-        browseRowsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        browseRowsRef.current?.scrollIntoView({ behavior: scrollBehavior, block: 'start' })
         return
       }
 
-      document.querySelector('.stream-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      document.querySelector('.stream-hero')?.scrollIntoView({ behavior: scrollBehavior, block: 'start' })
     }, isHeroCollapsed ? 420 : 0)
 
     return () => {
@@ -1936,18 +2003,20 @@ const BrowsePage = () => {
   }, [isHeroCollapsed])
 
   useEffect(() => {
+    setHeroIndex(0)
+  }, [heroQueueMode, mediaFilter])
+
+  useEffect(() => {
     let isActive = true
 
     const loadHeroTrailer = async () => {
-      const heroCandidates = trendingMovies.filter((movie) => movie.backdrop_path || movie.poster_path)
-
-      if (heroCandidates.length === 0) {
+      if (heroQueueItems.length === 0) {
         setHeroTitle(null)
         setHeroTrailerUrl('')
         return
       }
 
-      const selectedTitle = heroCandidates[((heroIndex % heroCandidates.length) + heroCandidates.length) % heroCandidates.length]
+      const selectedTitle = heroQueueItems[((heroIndex % heroQueueItems.length) + heroQueueItems.length) % heroQueueItems.length]
       setHeroTitle(selectedTitle)
       setHeroTrailerUrl('')
 
@@ -1962,9 +2031,7 @@ const BrowsePage = () => {
           },
           5 * CACHE_TTL_MS
         )
-        const video = (data.results || []).find((entry) =>
-          entry.site === 'YouTube' && ['Trailer', 'Teaser'].includes(entry.type)
-        )
+        const video = getBestHeroVideo(data.results || [])
 
         if (isActive) {
           setHeroTrailerUrl(getHeroTrailerEmbedUrl(video?.key))
@@ -1982,12 +2049,12 @@ const BrowsePage = () => {
     return () => {
       isActive = false
     }
-  }, [heroIndex, trendingMovies])
+  }, [heroIndex, heroQueueItems])
 
   useEffect(() => {
     if (!heroTrailerUrl || isHeroCollapsed) return undefined
 
-    const syncTimeouts = [120, 650, 1400, 2600].map((delay) =>
+    const syncTimeouts = [80, 450, 1200].map((delay) =>
       window.setTimeout(syncHeroAudio, delay)
     )
 
@@ -2017,26 +2084,32 @@ const BrowsePage = () => {
 
   useEffect(() => {
     fetchMovies(debouncedSearchTerm, selectedGenreIds, currentPage, mediaFilter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearchTerm, selectedGenreIds, currentPage, mediaFilter])
 
   useEffect(() => {
     if (movieList.length > 0) fetchMovieRuntimes(movieList)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [movieList])
 
   useEffect(() => {
     if (trendingMovies.length > 0) fetchMovieRuntimes(trendingMovies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trendingMovies])
 
   useEffect(() => {
     if (topRatedMovies.length > 0) fetchMovieRuntimes(topRatedMovies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topRatedMovies])
 
   useEffect(() => {
     if (favoriteMovies.length > 0) fetchMovieRuntimes(favoriteMovies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [favoriteMovies])
 
   useEffect(() => {
     if (recentlyWatchedMovies.length > 0) fetchMovieRuntimes(recentlyWatchedMovies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentlyWatchedMovies])
 
   const handleAuthSubmit = async (payload) => {
@@ -2098,6 +2171,16 @@ const BrowsePage = () => {
         console.log(`Error deleting account: ${error}`)
         setDeletionNotice('We could not complete your account deletion right now. Please try again later.')
       })
+  }
+
+  const acceptCookieNotice = () => {
+    try {
+      window.localStorage.setItem(COOKIE_NOTICE_STORAGE_KEY, 'accepted')
+    } catch {
+      // The notice can still be dismissed if storage is unavailable.
+    }
+
+    setHasAcceptedCookieNotice(true)
   }
 
   const LockedCollectionState = ({ title, message }) => (
@@ -2255,20 +2338,19 @@ const BrowsePage = () => {
   }
 
   const heroBackdrop = heroTitle ? getBackdropUrl(heroTitle, 'original') : '/hero-bg.png'
-  const heroMediaStyle = heroTrailerUrl ? undefined : { backgroundImage: `url(${heroBackdrop})` }
+  const heroMediaStyle = { backgroundImage: `url(${heroBackdrop})` }
   const changeHeroTitle = (direction) => {
-    const heroCandidates = trendingMovies.filter((movie) => movie.backdrop_path || movie.poster_path)
-    if (heroCandidates.length === 0) return
+    if (heroQueueItems.length === 0) return
 
     setIsHeroCollapsed(false)
-    setHeroIndex((currentIndex) => (currentIndex + direction + heroCandidates.length) % heroCandidates.length)
+    setHeroIndex((currentIndex) => (currentIndex + direction + heroQueueItems.length) % heroQueueItems.length)
     requestAnimationFrame(() => {
       document.querySelector('.stream-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
-  const toggleHeroFocus = () => {
+  const toggleHeroFocus = useCallback(() => {
     setIsHeroCollapsed((isCollapsed) => !isCollapsed)
-  }
+  }, [])
   const filteredTrendingMovies = selectedGenreIds.length > 0
     ? trendingMovies.filter((movie) => movie.genre_ids?.some((genreId) => selectedGenreIds.includes(genreId)))
     : trendingMovies
@@ -2296,6 +2378,14 @@ const BrowsePage = () => {
     }
   ]
   const searchResults = debouncedSearchTerm.trim().length >= SEARCH_MIN_LENGTH ? movieList : []
+
+  if (legalDocumentType) {
+    return (
+      <AppShell>
+        <LegalPage type={legalDocumentType} onBackHome={() => navigate('/')} />
+      </AppShell>
+    )
+  }
 
   if (isAuthRouteOpen) {
     return (
@@ -2328,7 +2418,8 @@ const BrowsePage = () => {
       <div className={`streaming-home ${isHeroCollapsed ? 'is-browse-focused' : ''}`}>
         <nav className="stream-nav" aria-label="Primary navigation">
           <button type="button" className="stream-nav-item is-active" onClick={resetToHome}>
-            Home
+            <HomeIcon className="stream-nav-svg" />
+            <span className="stream-nav-label">Home</span>
           </button>
 
           <button
@@ -2336,7 +2427,8 @@ const BrowsePage = () => {
             className={`stream-nav-item ${mediaFilter === 'movie' ? 'is-active-soft' : ''}`}
             onClick={() => setMediaFilter('movie')}
           >
-            Movies
+            <ClapperboardIcon className="stream-nav-svg" />
+            <span className="stream-nav-label">Movies</span>
           </button>
 
           <button
@@ -2344,7 +2436,8 @@ const BrowsePage = () => {
             className={`stream-nav-item ${mediaFilter === 'tv' ? 'is-active-soft' : ''}`}
             onClick={() => setMediaFilter('tv')}
           >
-            TV
+            <TvIcon className="stream-nav-svg" />
+            <span className="stream-nav-label">TV</span>
           </button>
 
           <button
@@ -2354,12 +2447,14 @@ const BrowsePage = () => {
             aria-expanded={isSearchOpen}
             aria-label="Search"
           >
-            Search
+            <SearchIcon className="stream-nav-svg" />
+            <span className="stream-nav-label">Search</span>
           </button>
 
           {isAuthenticated ? (
             <button type="button" className="stream-nav-icon" onClick={handleLogout} aria-label="Log out">
-              Logout
+              <LogOutIcon className="stream-nav-svg" />
+              <span className="stream-nav-label">Logout</span>
             </button>
           ) : (
             <button
@@ -2371,7 +2466,8 @@ const BrowsePage = () => {
               }}
               aria-label="Log in"
             >
-              Login
+              <LogInIcon className="stream-nav-svg" />
+              <span className="stream-nav-label">Login</span>
             </button>
           )}
         </nav>
@@ -2434,7 +2530,12 @@ const BrowsePage = () => {
                         openTitleDetails(movie)
                       }}
                     >
-                      <img src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')} alt="" />
+                      <img
+                        src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                      />
                       <span>{movie.title}</span>
                     </button>
                   ))}
@@ -2465,6 +2566,25 @@ const BrowsePage = () => {
           </div>
 
           <div className="stream-hero-shade" />
+
+          <div className="stream-hero-queue-switch" aria-label="Hero movie queue">
+            <button
+              type="button"
+              className={heroQueueMode === 'trending' ? 'is-active' : ''}
+              onClick={() => setHeroQueueMode('trending')}
+              aria-pressed={heroQueueMode === 'trending'}
+            >
+              Trending
+            </button>
+            <button
+              type="button"
+              className={heroQueueMode === 'popular' ? 'is-active' : ''}
+              onClick={() => setHeroQueueMode('popular')}
+              aria-pressed={heroQueueMode === 'popular'}
+            >
+              Popular
+            </button>
+          </div>
 
           <button
             type="button"
@@ -2525,18 +2645,18 @@ const BrowsePage = () => {
 
         <button
           type="button"
-          className="stream-hero-toggle"
+          className={`stream-hero-toggle ${isHeroCollapsed ? 'is-expanded' : 'is-collapsed'}`}
           onClick={toggleHeroFocus}
           aria-label={isHeroCollapsed ? 'Show featured trailer' : 'Show browse rows'}
           aria-pressed={isHeroCollapsed}
         >
-          <span aria-hidden="true">{isHeroCollapsed ? '⌃' : '⌄'}</span>
+          <span className="stream-hero-toggle-icon" aria-hidden="true" />
         </button>
 
         <section className="stream-belts" aria-label="Browse rows" ref={browseRowsRef}>
           <ContinueWatchingSection />
 
-          {heroRows.map((row, index) => (
+          {heroRows.map((row) => (
             <ContentBelt
               key={row.id}
               title={row.title}
@@ -2556,7 +2676,7 @@ const BrowsePage = () => {
 
           {isGenreRowsLoading && (
             <div className="stream-belt-loading">
-              <Spinner />
+              <Spinner label="Loading genres" />
             </div>
           )}
 
@@ -2582,9 +2702,21 @@ const BrowsePage = () => {
         <footer className="stream-footer" aria-label="Site disclaimer and attribution">
           <span>Movie Browser Demo</span>
           <span>Powered by TMDB data for discovery.</span>
+          <a href={TERMS_PATH}>Terms</a>
+          <a href={PRIVACY_PATH}>Privacy</a>
           <button type="button" onClick={handleDeletionRequest}>Request data deletion</button>
           {deletionNotice && <span>{deletionNotice}</span>}
         </footer>
+
+        {!hasAcceptedCookieNotice && (
+          <div className="cookie-notice" role="region" aria-label="Cookie and local storage notice">
+            <p>
+              Movieslo uses cookies and local storage for login sessions, preferences, cache, and account features.
+              Read the <a href={PRIVACY_PATH}>Privacy Policy</a>.
+            </p>
+            <button type="button" onClick={acceptCookieNotice}>Accept</button>
+          </div>
+        )}
       </div>
 
       {activeDetailMediaType && activeDetailId && (

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Movieslo">
+  <rect width="64" height="64" rx="16" fill="#050505"/>
+  <circle cx="22" cy="22" r="8" fill="#f8fafc"/>
+  <circle cx="40" cy="22" r="8" fill="#f8fafc"/>
+  <rect x="13" y="31" width="32" height="20" rx="6" fill="#f8fafc"/>
+  <path d="M45 36.5 57 30v22l-12-6.5z" fill="#f8fafc"/>
+  <circle cx="22" cy="22" r="3" fill="#050505"/>
+  <circle cx="40" cy="22" r="3" fill="#050505"/>
+  <rect x="20" y="38" width="15" height="4" rx="2" fill="#050505" opacity=".75"/>
+</svg>

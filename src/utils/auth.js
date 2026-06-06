@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient.js'
+import { LEGAL_DOCUMENT_VERSION } from './legal.js'
 
 const FAVORITES_TABLE = 'favorite_movies'
 const RECENTLY_WATCHED_TABLE = 'recently_watched'
@@ -52,15 +53,28 @@ export const authApi = {
     return { user: data.user }
   },
 
-  signup: async ({ name, email, password }) => {
+  signup: async ({ name, email, password, legalAccepted, legalVersion }) => {
     const safeName = sanitizeDisplayName(name)
     const safeEmail = normalizeEmail(email)
+
+    if (!legalAccepted || legalVersion !== LEGAL_DOCUMENT_VERSION) {
+      throw new Error('You must accept the current Terms of Service and Privacy Policy.')
+    }
+
+    const acceptedAt = new Date().toISOString()
     const { data, error } = await supabase.auth.signUp({
       email: safeEmail,
       password,
       options: {
         data: {
-          name: safeName
+          name: safeName,
+          legal_terms_accepted: true,
+          legal_terms_accepted_at: acceptedAt,
+          legal_terms_version: LEGAL_DOCUMENT_VERSION,
+          privacy_policy_accepted: true,
+          privacy_policy_accepted_at: acceptedAt,
+          privacy_policy_version: LEGAL_DOCUMENT_VERSION,
+          app_name: 'Movieslo'
         }
       }
     })
