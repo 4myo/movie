@@ -10,7 +10,9 @@ import {
   LogInIcon,
   LogOutIcon,
   SearchIcon,
+  SettingsIcon,
   TvIcon,
+  UserIcon,
   VideoCameraIcon
 } from './components/Icons.jsx'
 import { supabase } from './supabaseClient.js'
@@ -56,7 +58,66 @@ const PERSISTENT_CACHE_KEYS = [
   'trending:'
 ]
 const COOKIE_NOTICE_STORAGE_KEY = 'movieslo-cookie-notice-v1'
+const TASTE_PROFILE_STORAGE_PREFIX = 'movieslo:taste-profile:v1:'
+const TASTE_QUIZ_DISMISSED_PREFIX = 'movieslo:taste-quiz-dismissed:v1:'
+const MAX_IGNORED_TITLE_KEYS = 1000
+const INITIAL_RECOMMENDATION_POOL_LIMIT = 120
+const RECOMMENDATION_POOL_CLICK_INCREMENT = 80
+const MAX_RECOMMENDATION_POOL_LIMIT = 1000
+const TASTE_PROFILE_SYNC_DEBOUNCE_MS = 3200
 const responseCache = new Map()
+const DEFAULT_TASTE_PROFILE = {
+  completed_onboarding: false,
+  preferred_genre_ids: [],
+  disliked_genre_ids: [],
+  preferred_moods: [],
+  preferred_media_type: 'both',
+  release_preference: 'mixed',
+  runtime_preference: 'any',
+  ignored_title_keys: []
+}
+const TASTE_MOOD_OPTIONS = [
+  { id: 'scary', label: 'Scary', genres: ['Horror', 'Mystery', 'Thriller'] },
+  { id: 'funny', label: 'Funny', genres: ['Comedy', 'Family', 'Animation'] },
+  { id: 'intense', label: 'Intense', genres: ['Action', 'Thriller', 'Crime'] },
+  { id: 'emotional', label: 'Emotional', genres: ['Drama', 'Romance'] },
+  { id: 'mystery', label: 'Mystery', genres: ['Mystery', 'Crime', 'Thriller'] },
+  { id: 'imaginative', label: 'Imaginative', genres: ['Fantasy', 'Science Fiction', 'Sci-Fi & Fantasy', 'Animation'] }
+]
+const TASTE_MEDIA_OPTIONS = [
+  { id: 'both', label: 'Movies + TV' },
+  { id: 'movie', label: 'Movies' },
+  { id: 'tv', label: 'TV' }
+]
+const TASTE_RELEASE_OPTIONS = [
+  { id: 'mixed', label: 'Mixed' },
+  { id: 'new', label: 'Newer' },
+  { id: 'classic', label: 'Classics' }
+]
+const TASTE_RUNTIME_OPTIONS = [
+  { id: 'any', label: 'Any length' },
+  { id: 'short', label: 'Short' },
+  { id: 'standard', label: 'Standard' },
+  { id: 'long', label: 'Long' }
+]
+const TASTE_GENRE_EQUIVALENT_GROUPS = [
+  [28, 10759],
+  [12, 10759],
+  [878, 10765],
+  [14, 10765],
+  [80],
+  [53, 9648],
+  [27, 9648],
+  [35],
+  [18],
+  [10749],
+  [16],
+  [10751, 10762],
+  [99],
+  [36, 10768],
+  [10752, 10768],
+  [37]
+]
 const MOVIE_BELT_GENRES = [
   'Action',
   'Adventure',
@@ -359,6 +420,305 @@ const upsertRuntime = (items, runtimeMap) =>
 const getRuntimeKey = (item) => `${item.media_type || 'movie'}-${item.id}`
 const getMediaItemKey = (item) => `${item.media_type || 'movie'}-${item.id}`
 
+const uniqueStringValues = (values = [], limit = 80) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => String(value).trim().toLowerCase()).filter(Boolean))].slice(0, limit)
+    : []
+
+const uniqueNumberValues = (values = [], limit = 20) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isSafeInteger(value) && value > 0))].slice(0, limit)
+    : []
+
+const normalizeTasteProfileForApp = (profile = {}) => ({
+  ...DEFAULT_TASTE_PROFILE,
+  completed_onboarding: Boolean(profile.completed_onboarding),
+  preferred_genre_ids: uniqueNumberValues(profile.preferred_genre_ids),
+  disliked_genre_ids: uniqueNumberValues(profile.disliked_genre_ids, 10),
+  preferred_moods: uniqueStringValues(profile.preferred_moods, 8),
+  preferred_media_type: TASTE_MEDIA_OPTIONS.some((option) => option.id === profile.preferred_media_type)
+    ? profile.preferred_media_type
+    : DEFAULT_TASTE_PROFILE.preferred_media_type,
+  release_preference: TASTE_RELEASE_OPTIONS.some((option) => option.id === profile.release_preference)
+    ? profile.release_preference
+    : DEFAULT_TASTE_PROFILE.release_preference,
+  runtime_preference: TASTE_RUNTIME_OPTIONS.some((option) => option.id === profile.runtime_preference)
+    ? profile.runtime_preference
+    : DEFAULT_TASTE_PROFILE.runtime_preference,
+  ignored_title_keys: uniqueStringValues(profile.ignored_title_keys, MAX_IGNORED_TITLE_KEYS),
+  updated_at: profile.updated_at || null
+})
+
+const getLocalTasteProfileKey = (userId) => `${TASTE_PROFILE_STORAGE_PREFIX}${userId}`
+const getTasteQuizDismissedKey = (userId) => `${TASTE_QUIZ_DISMISSED_PREFIX}${userId}`
+
+const getLocalTasteProfile = (userId) => {
+  if (!userId || typeof window === 'undefined' || !window.localStorage) return null
+
+  try {
+    const rawProfile = window.localStorage.getItem(getLocalTasteProfileKey(userId))
+    return rawProfile ? normalizeTasteProfileForApp(JSON.parse(rawProfile)) : null
+  } catch {
+    return null
+  }
+}
+
+const setLocalTasteProfile = (userId, profile) => {
+  if (!userId || typeof window === 'undefined' || !window.localStorage) return
+
+  try {
+    window.localStorage.setItem(getLocalTasteProfileKey(userId), JSON.stringify(normalizeTasteProfileForApp(profile)))
+  } catch {
+    // Local taste is a convenience cache; Supabase auth metadata remains the account source when available.
+  }
+}
+
+const getHasDismissedTasteQuiz = (userId) => {
+  if (!userId || typeof window === 'undefined' || !window.localStorage) return false
+
+  try {
+    return window.localStorage.getItem(getTasteQuizDismissedKey(userId)) === 'true'
+  } catch {
+    return false
+  }
+}
+
+const setHasDismissedTasteQuiz = (userId) => {
+  if (!userId || typeof window === 'undefined' || !window.localStorage) return
+
+  try {
+    window.localStorage.setItem(getTasteQuizDismissedKey(userId), 'true')
+  } catch {
+    // Dismissing the modal can stay session-only if storage is unavailable.
+  }
+}
+
+const getTasteGenreOptions = (genres = []) => {
+  const preferredNames = [
+    'Action',
+    'Comedy',
+    'Drama',
+    'Horror',
+    'Mystery',
+    'Romance',
+    'Science Fiction',
+    'Thriller',
+    'Fantasy',
+    'Animation',
+    'Crime',
+    'Family'
+  ]
+  const genreByName = new Map(genres.map((genre) => [genre.name.toLowerCase(), genre]))
+  const preferredGenres = preferredNames
+    .map((name) => genreByName.get(name.toLowerCase()))
+    .filter(Boolean)
+  const selectedIds = new Set(preferredGenres.map((genre) => genre.id))
+  const fallbackGenres = genres
+    .filter((genre) => !selectedIds.has(genre.id))
+    .sort((firstGenre, secondGenre) => firstGenre.name.localeCompare(secondGenre.name))
+
+  return [...preferredGenres, ...fallbackGenres].slice(0, 14)
+}
+
+const getMovieYear = (movie) => {
+  const year = Number((movie?.release_date || movie?.first_air_date || '').slice(0, 4))
+  return Number.isFinite(year) ? year : null
+}
+
+const getRuntimeScore = (runtime, preference) => {
+  if (!runtime || preference === 'any') return 0
+  if (preference === 'short') return runtime <= 95 ? 18 : runtime > 145 ? -8 : 4
+  if (preference === 'long') return runtime >= 135 ? 18 : runtime < 95 ? -8 : 4
+  return runtime >= 90 && runtime <= 145 ? 18 : 2
+}
+
+const getReleaseScore = (year, preference) => {
+  if (!year || preference === 'mixed') return 0
+  if (preference === 'new') return year >= 2020 ? 18 : year >= 2014 ? 8 : -6
+  return year <= 2005 ? 18 : year <= 2014 ? 8 : -4
+}
+
+const expandEquivalentGenreIds = (genreIds = []) => {
+  const expandedGenreIds = new Set(genreIds)
+
+  genreIds.forEach((genreId) => {
+    TASTE_GENRE_EQUIVALENT_GROUPS
+      .filter((group) => group.includes(genreId))
+      .forEach((equivalentGroup) => {
+        equivalentGroup.forEach((equivalentGenreId) => expandedGenreIds.add(equivalentGenreId))
+      })
+  })
+
+  return expandedGenreIds
+}
+
+const incrementGenreCounts = (genreCounts, genreIds = []) => {
+  genreIds.forEach((genreId) => {
+    expandEquivalentGenreIds([genreId]).forEach((equivalentGenreId) => {
+      genreCounts.set(equivalentGenreId, (genreCounts.get(equivalentGenreId) || 0) + 1)
+    })
+  })
+}
+
+const addGenreIdsByName = (targetSet, genreIdsByName, genreNames = []) => {
+  genreNames.forEach((genreName) => {
+    const normalizedName = genreName.toLowerCase()
+    const genreId = genreIdsByName.get(normalizedName)
+
+    if (genreId) {
+      expandEquivalentGenreIds([genreId]).forEach((equivalentGenreId) => targetSet.add(equivalentGenreId))
+      return
+    }
+
+    genreIdsByName.forEach((candidateGenreId, candidateGenreName) => {
+      if (candidateGenreName.includes(normalizedName) || normalizedName.includes(candidateGenreName)) {
+        expandEquivalentGenreIds([candidateGenreId]).forEach((equivalentGenreId) => targetSet.add(equivalentGenreId))
+      }
+    })
+  })
+}
+
+const getRecommendationDiscoverGenreIds = ({
+  genreList = [],
+  selectedGenreIds = [],
+  tasteProfile = DEFAULT_TASTE_PROFILE
+}) => {
+  const normalizedProfile = normalizeTasteProfileForApp(tasteProfile)
+  const validGenreIds = new Set(genreList.map((genre) => genre.id))
+  const genreIdsByName = new Map(genreList.map((genre) => [genre.name.toLowerCase(), genre.id]))
+  const profileGenreIds = new Set(normalizedProfile.preferred_genre_ids)
+
+  normalizedProfile.preferred_moods.forEach((moodId) => {
+    const mood = TASTE_MOOD_OPTIONS.find((option) => option.id === moodId)
+    addGenreIdsByName(profileGenreIds, genreIdsByName, mood?.genres || [])
+  })
+
+  const sourceGenreIds = selectedGenreIds.length > 0 ? selectedGenreIds : Array.from(profileGenreIds)
+  return Array.from(expandEquivalentGenreIds(sourceGenreIds))
+    .filter((genreId) => validGenreIds.has(genreId))
+    .slice(0, 8)
+}
+
+const buildRecommendations = ({
+  movieList = [],
+  trendingMovies = [],
+  topRatedMovies = [],
+  recommendationPoolMovies = [],
+  favoriteMovies = [],
+  recentlyWatchedMovies = [],
+  genreRows = [],
+  genreList = [],
+  selectedGenreIds = [],
+  tasteProfile = DEFAULT_TASTE_PROFILE,
+  runtimeMap = {},
+  recommendationLimit = INITIAL_RECOMMENDATION_POOL_LIMIT
+}) => {
+  const normalizedProfile = normalizeTasteProfileForApp(tasteProfile)
+  const sourceMap = new Map()
+  const addSourceItems = (items, sourceWeight) => {
+    items.forEach((item) => {
+      if (!item?.id) return
+
+      const normalizedItem = {
+        ...item,
+        runtime: runtimeMap[getRuntimeKey(item)] ?? item.runtime ?? null
+      }
+      const key = getMediaItemKey(normalizedItem)
+      const existing = sourceMap.get(key)
+
+      if (!existing || sourceWeight > existing.sourceWeight) {
+        sourceMap.set(key, { item: normalizedItem, sourceWeight })
+      }
+    })
+  }
+
+  addSourceItems(recommendationPoolMovies, 30)
+  addSourceItems(topRatedMovies, 28)
+  addSourceItems(trendingMovies, 24)
+  addSourceItems(movieList, 18)
+  genreRows.forEach((row) => addSourceItems(row.items || [], 16))
+  addSourceItems(favoriteMovies, 8)
+
+  const genreNameById = new Map(genreList.map((genre) => [genre.id, genre.name]))
+  const genreIdsByName = new Map(genreList.map((genre) => [genre.name.toLowerCase(), genre.id]))
+  const watchedKeys = new Set(recentlyWatchedMovies.map((movie) => getMediaItemKey(movie)))
+  const ignoredKeys = new Set(normalizedProfile.ignored_title_keys)
+  const favoriteKeys = new Set(favoriteMovies.map((movie) => getMediaItemKey(movie)))
+  const preferenceGenreIds = expandEquivalentGenreIds(normalizedProfile.preferred_genre_ids)
+  const dislikedGenreIds = expandEquivalentGenreIds(normalizedProfile.disliked_genre_ids)
+  const selectedGenreSet = expandEquivalentGenreIds(selectedGenreIds)
+  const favoriteGenreCounts = new Map()
+  const watchedGenreCounts = new Map()
+  const moodGenreIds = new Set()
+
+  favoriteMovies.forEach((movie) => {
+    incrementGenreCounts(favoriteGenreCounts, movie.genre_ids || [])
+  })
+
+  recentlyWatchedMovies.forEach((movie) => {
+    incrementGenreCounts(watchedGenreCounts, movie.genre_ids || [])
+  })
+
+  normalizedProfile.preferred_moods.forEach((moodId) => {
+    const mood = TASTE_MOOD_OPTIONS.find((option) => option.id === moodId)
+    addGenreIdsByName(moodGenreIds, genreIdsByName, mood?.genres || [])
+  })
+  const hasExplicitTaste =
+    preferenceGenreIds.size > 0 ||
+    moodGenreIds.size > 0 ||
+    selectedGenreSet.size > 0
+
+  return Array.from(sourceMap.values())
+    .map(({ item, sourceWeight }) => {
+      const key = getMediaItemKey(item)
+      if (watchedKeys.has(key) || ignoredKeys.has(key)) return null
+
+      const itemGenreIds = item.genre_ids || []
+      const matchingPreferredGenres = itemGenreIds.filter((genreId) => preferenceGenreIds.has(genreId)).length
+      const matchingMoodGenres = itemGenreIds.filter((genreId) => moodGenreIds.has(genreId)).length
+      const matchingSelectedGenres = itemGenreIds.filter((genreId) => selectedGenreSet.has(genreId)).length
+      const explicitTasteMatches = matchingPreferredGenres + matchingMoodGenres + matchingSelectedGenres
+      const dislikedMatches = itemGenreIds.filter((genreId) => dislikedGenreIds.has(genreId)).length
+      const favoriteGenreScore = itemGenreIds.reduce((score, genreId) => score + Math.min(favoriteGenreCounts.get(genreId) || 0, 3) * 12, 0)
+      const watchedGenreScore = itemGenreIds.reduce((score, genreId) => score + Math.min(watchedGenreCounts.get(genreId) || 0, 3) * 8, 0)
+      const mediaType = item.media_type || 'movie'
+      const mediaScore = normalizedProfile.preferred_media_type === 'both'
+        ? 0
+        : mediaType === normalizedProfile.preferred_media_type ? 16 : -18
+      const ratingScore = clampNumber(Number(item.vote_average || 0), 0, 10) * 3
+      const popularityScore = Math.min(Math.log1p(Number(item.popularity || 0)) * 3, 18)
+      const releaseScore = getReleaseScore(getMovieYear(item), normalizedProfile.release_preference)
+      const runtimeScore = getRuntimeScore(item.runtime, normalizedProfile.runtime_preference)
+      const favoritePenalty = favoriteKeys.has(key) ? -16 : 0
+      const explicitMismatchPenalty = hasExplicitTaste && explicitTasteMatches === 0 ? -95 : 0
+      const weakMatchPenalty = hasExplicitTaste && explicitTasteMatches === 1 ? -10 : 0
+
+      return {
+        ...item,
+        recommendation_score:
+          sourceWeight +
+          matchingPreferredGenres * 78 +
+          matchingMoodGenres * 34 +
+          matchingSelectedGenres * 42 +
+          favoriteGenreScore +
+          watchedGenreScore +
+          mediaScore +
+          ratingScore +
+          popularityScore +
+          releaseScore +
+          runtimeScore +
+          favoritePenalty -
+          dislikedMatches * 100 +
+          explicitMismatchPenalty +
+          weakMatchPenalty,
+        recommendation_genres: itemGenreIds.map((genreId) => genreNameById.get(genreId)).filter(Boolean).slice(0, 3)
+      }
+    })
+    .filter(Boolean)
+    .sort((firstItem, secondItem) => secondItem.recommendation_score - firstItem.recommendation_score)
+    .slice(0, clampNumber(recommendationLimit, INITIAL_RECOMMENDATION_POOL_LIMIT, MAX_RECOMMENDATION_POOL_LIMIT))
+}
+
 const orderGenresForRows = (availableGenres = [], selectedMediaFilter = 'movie') => {
   const preferredGenreNames = selectedMediaFilter === 'tv' ? TV_BELT_GENRES : MOVIE_BELT_GENRES
   const genreByName = new Map(availableGenres.map((genre) => [genre.name.toLowerCase(), genre]))
@@ -642,7 +1002,7 @@ const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorM
   </main>
 )
 
-const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle }) {
+const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle, onDismiss }) {
   return (
     <article
       className="belt-card"
@@ -658,6 +1018,19 @@ const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle })
       aria-label={`Open ${movie.title}`}
       style={{ '--card-index': index }}
     >
+      {onDismiss && (
+        <button
+          type="button"
+          className="belt-card-dismiss"
+          onClick={(event) => {
+            event.stopPropagation()
+            onDismiss(movie)
+          }}
+          aria-label={`Hide ${movie.title} from recommendations`}
+        >
+          ×
+        </button>
+      )}
       <div className="belt-card-image-shell">
         <img
           className="belt-card-image"
@@ -677,9 +1050,11 @@ const ContentBelt = React.memo(function ContentBelt({
   title,
   items = [],
   accent = '',
+  headingAction = null,
   onLoadMore,
   beltKey,
   onOpenTitle,
+  onDismissTitle,
   beltVisibleCounts,
   setBeltVisibleCounts,
   loadingMoreBeltKeys,
@@ -746,6 +1121,7 @@ const ContentBelt = React.memo(function ContentBelt({
       <div className="content-belt-heading">
         <h2 id={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>{title}</h2>
         {accent && <span>{accent}</span>}
+        {headingAction}
         <div className="content-belt-controls">
           <button type="button" onClick={() => scrollBelt('left')} aria-label={`Scroll ${title} left`}>‹</button>
           <button type="button" onClick={() => scrollBelt('right')} aria-label={`Scroll ${title} right`}>›</button>
@@ -760,6 +1136,7 @@ const ContentBelt = React.memo(function ContentBelt({
               movie={movie}
               index={index}
               onOpenTitle={onOpenTitle}
+              onDismiss={onDismissTitle}
             />
           ))}
           {hasMoreItems && (
@@ -778,6 +1155,357 @@ const ContentBelt = React.memo(function ContentBelt({
     </section>
   )
 })
+
+const toggleArrayValue = (values = [], value, limit = Number.POSITIVE_INFINITY) => {
+  const normalizedValue = typeof value === 'number' ? value : String(value).toLowerCase()
+  const hasValue = values.includes(normalizedValue)
+
+  if (hasValue) return values.filter((item) => item !== normalizedValue)
+  return [...values, normalizedValue].slice(0, limit)
+}
+
+const TasteQuizModal = ({
+  profile,
+  genreOptions,
+  onSave,
+  onDismiss,
+  isSaving = false
+}) => {
+  const [draftProfile, setDraftProfile] = useState(() => normalizeTasteProfileForApp(profile))
+
+  const updateDraft = (updates) => {
+    setDraftProfile((currentProfile) => normalizeTasteProfileForApp({
+      ...currentProfile,
+      ...updates
+    }))
+  }
+
+  return (
+    <div className="taste-modal-backdrop" role="presentation">
+      <section className="taste-modal" role="dialog" aria-modal="true" aria-labelledby="taste-modal-title">
+        <div className="taste-modal-header">
+          <div>
+            <p>Movieslo profile</p>
+            <h2 id="taste-modal-title">Pick Your Taste</h2>
+          </div>
+          <button type="button" onClick={onDismiss} aria-label="Close taste quiz">
+            ×
+          </button>
+        </div>
+
+        <div className="taste-modal-scroll custom-scrollbar">
+          <div className="taste-question">
+            <h3>Genres</h3>
+            <div className="taste-chip-grid">
+              {genreOptions.map((genre) => (
+                <button
+                  key={`taste-genre-${genre.id}`}
+                  type="button"
+                  className={draftProfile.preferred_genre_ids.includes(genre.id) ? 'is-active' : ''}
+                  onClick={() => updateDraft({
+                    preferred_genre_ids: toggleArrayValue(draftProfile.preferred_genre_ids, genre.id, 8)
+                  })}
+                >
+                  {genre.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="taste-question">
+            <h3>Mood</h3>
+            <div className="taste-chip-grid">
+              {TASTE_MOOD_OPTIONS.map((mood) => (
+                <button
+                  key={`taste-mood-${mood.id}`}
+                  type="button"
+                  className={draftProfile.preferred_moods.includes(mood.id) ? 'is-active' : ''}
+                  onClick={() => updateDraft({
+                    preferred_moods: toggleArrayValue(draftProfile.preferred_moods, mood.id, 4)
+                  })}
+                >
+                  {mood.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="taste-question-grid">
+            <div className="taste-question">
+              <h3>Format</h3>
+              <div className="taste-segmented">
+                {TASTE_MEDIA_OPTIONS.map((option) => (
+                  <button
+                    key={`taste-media-${option.id}`}
+                    type="button"
+                    className={draftProfile.preferred_media_type === option.id ? 'is-active' : ''}
+                    onClick={() => updateDraft({ preferred_media_type: option.id })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="taste-question">
+              <h3>Era</h3>
+              <div className="taste-segmented">
+                {TASTE_RELEASE_OPTIONS.map((option) => (
+                  <button
+                    key={`taste-release-${option.id}`}
+                    type="button"
+                    className={draftProfile.release_preference === option.id ? 'is-active' : ''}
+                    onClick={() => updateDraft({ release_preference: option.id })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="taste-question">
+              <h3>Length</h3>
+              <div className="taste-segmented">
+                {TASTE_RUNTIME_OPTIONS.map((option) => (
+                  <button
+                    key={`taste-runtime-${option.id}`}
+                    type="button"
+                    className={draftProfile.runtime_preference === option.id ? 'is-active' : ''}
+                    onClick={() => updateDraft({ runtime_preference: option.id })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="taste-modal-actions">
+          <button type="button" className="taste-secondary-action" onClick={onDismiss}>
+            Later
+          </button>
+          <button
+            type="button"
+            className="taste-primary-action"
+            onClick={() => onSave(draftProfile)}
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving...' : 'Save taste'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+const ProfilePanel = ({
+  isOpen,
+  user,
+  profile,
+  genreList,
+  favoriteCount = 0,
+  historyCount = 0,
+  recommendationCount = 0,
+  recommendationPoolTarget = INITIAL_RECOMMENDATION_POOL_LIMIT,
+  hiddenPickCount = 0,
+  isTrustedDevice = false,
+  isPasswordResetSending = false,
+  statusMessage = '',
+  onClose,
+  onOpenTasteQuiz,
+  onClearHiddenPicks,
+  onClearWatchHistory,
+  onRequestPasswordReset,
+  onRequestDataDeletion,
+  onLogout
+}) => {
+  if (!isOpen) return null
+
+  const normalizedProfile = normalizeTasteProfileForApp(profile)
+  const genreNameById = new Map(genreList.map((genre) => [genre.id, genre.name]))
+  const selectedGenreNames = normalizedProfile.preferred_genre_ids
+    .map((genreId) => genreNameById.get(genreId))
+    .filter(Boolean)
+  const moodLabels = normalizedProfile.preferred_moods
+    .map((moodId) => TASTE_MOOD_OPTIONS.find((option) => option.id === moodId)?.label)
+    .filter(Boolean)
+  const mediaLabel = TASTE_MEDIA_OPTIONS.find((option) => option.id === normalizedProfile.preferred_media_type)?.label || 'Movies + TV'
+  const releaseLabel = TASTE_RELEASE_OPTIONS.find((option) => option.id === normalizedProfile.release_preference)?.label || 'Mixed'
+  const runtimeLabel = TASTE_RUNTIME_OPTIONS.find((option) => option.id === normalizedProfile.runtime_preference)?.label || 'Any length'
+  const displayName = user?.user_metadata?.name || user?.email?.split('@')[0] || 'Profile'
+  const joinedAt = user?.created_at
+    ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(user.created_at))
+    : 'Account active'
+
+  return (
+    <div className="profile-panel-backdrop" role="presentation">
+      <section className="profile-panel" role="dialog" aria-modal="true" aria-labelledby="profile-panel-title">
+        <div className="profile-panel-header">
+          <div className="profile-avatar" aria-hidden="true">
+            <UserIcon />
+          </div>
+          <div>
+            <p>Account settings</p>
+            <h2 id="profile-panel-title">Settings</h2>
+            <span>{displayName}{user?.email ? ` - ${user.email}` : ''}</span>
+          </div>
+          <button type="button" className="profile-panel-close" onClick={onClose} aria-label="Close profile">
+            ×
+          </button>
+        </div>
+
+        <div className="account-settings-scroll custom-scrollbar">
+          <div className="profile-settings-block">
+            <div className="profile-block-heading">
+              <UserIcon />
+              <h3>Account</h3>
+            </div>
+
+            <div className="settings-row-list">
+              <div className="settings-row">
+                <div>
+                  <span>Name</span>
+                  <strong>{displayName}</strong>
+                </div>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Email</span>
+                  <strong>{user?.email || 'Signed in account'}</strong>
+                </div>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Session</span>
+                  <strong>{isTrustedDevice ? 'Trusted for this device' : 'Current browser session'}</strong>
+                </div>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Created</span>
+                  <strong>{joinedAt}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-settings-block">
+            <div className="profile-block-heading">
+              <SettingsIcon />
+              <h3>Taste Preferences</h3>
+            </div>
+
+            <div className="profile-taste-tags">
+              {[...selectedGenreNames, ...moodLabels, mediaLabel, releaseLabel, runtimeLabel].slice(0, 12).map((label) => (
+                <span key={`profile-tag-${label}`}>{label}</span>
+              ))}
+              {selectedGenreNames.length === 0 && moodLabels.length === 0 && (
+                <span>Not tuned yet</span>
+              )}
+            </div>
+
+            <div className="settings-row-list settings-row-list-spaced">
+              <div className="settings-row">
+                <div>
+                  <span>Taste profile</span>
+                  <strong>{selectedGenreNames.length > 0 || moodLabels.length > 0 ? 'Personalized' : 'Not tuned yet'}</strong>
+                </div>
+                <button type="button" className="settings-row-action" onClick={onOpenTasteQuiz}>
+                  Edit
+                </button>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Hidden picks</span>
+                  <strong>{hiddenPickCount}</strong>
+                </div>
+                <button type="button" className="settings-row-action" onClick={onClearHiddenPicks} disabled={hiddenPickCount === 0}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-settings-block">
+            <div className="profile-block-heading">
+              <VideoCameraIcon />
+              <h3>Library</h3>
+            </div>
+
+            <div className="settings-row-list">
+              <div className="settings-row">
+                <div>
+                  <span>Favorites</span>
+                  <strong>{favoriteCount}</strong>
+                </div>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Watch history</span>
+                  <strong>{historyCount}</strong>
+                </div>
+                <button type="button" className="settings-row-action" onClick={onClearWatchHistory} disabled={historyCount === 0}>
+                  Clear
+                </button>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Recommendation pool</span>
+                  <strong>{recommendationCount} / {recommendationPoolTarget} target</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-settings-block">
+            <div className="profile-block-heading">
+              <LogOutIcon />
+              <h3>Security</h3>
+            </div>
+
+            <div className="settings-row-list">
+              <div className="settings-row">
+                <div>
+                  <span>Password</span>
+                  <strong>Reset by email</strong>
+                </div>
+                <button
+                  type="button"
+                  className="settings-row-action"
+                  onClick={onRequestPasswordReset}
+                  disabled={isPasswordResetSending}
+                >
+                  {isPasswordResetSending ? 'Sending...' : 'Send reset'}
+                </button>
+              </div>
+              <div className="settings-row settings-row-danger">
+                <div>
+                  <span>Account data</span>
+                  <strong>Permanent deletion</strong>
+                </div>
+                <button type="button" className="settings-row-action settings-row-danger-action" onClick={onRequestDataDeletion}>
+                  Request data deletion
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {statusMessage && <p className="profile-status-message">{statusMessage}</p>}
+
+        <div className="profile-actions">
+          <button type="button" className="profile-logout-action" onClick={onLogout}>
+            Log out
+          </button>
+          <button type="button" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
 
 const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
   const navigate = useNavigate()
@@ -1136,8 +1864,10 @@ const BrowsePage = () => {
   const [movieList, setMovieList] = useState([])
   const [trendingMovies, setTrendingMovies] = useState([])
   const [topRatedMovies, setTopRatedMovies] = useState([])
+  const [recommendationPoolMovies, setRecommendationPoolMovies] = useState([])
+  const [recommendationPoolLimit, setRecommendationPoolLimit] = useState(INITIAL_RECOMMENDATION_POOL_LIMIT)
   const [genreRows, setGenreRows] = useState([])
-  const [beltPages, setBeltPages] = useState({ popular: 1, topRated: 1, trending: 1 })
+  const [beltPages, setBeltPages] = useState({ popular: 1, topRated: 1, trending: 1, recommendations: 1 })
   const [beltVisibleCounts, setBeltVisibleCounts] = useState({})
   const [loadingMoreBeltKeys, setLoadingMoreBeltKeys] = useState([])
   const [exhaustedBeltKeys, setExhaustedBeltKeys] = useState([])
@@ -1169,6 +1899,13 @@ const BrowsePage = () => {
   const [_isAuthLoading, setIsAuthLoading] = useState(true)
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [authErrorMessage, setAuthErrorMessage] = useState('')
+  const [tasteProfile, setTasteProfile] = useState(DEFAULT_TASTE_PROFILE)
+  const [isTasteQuizOpen, setIsTasteQuizOpen] = useState(false)
+  const [isSavingTasteProfile, setIsSavingTasteProfile] = useState(false)
+  const [isPasswordResetSending, setIsPasswordResetSending] = useState(false)
+  const [isProfilePanelOpen, setIsProfilePanelOpen] = useState(false)
+  const [hasDismissedTasteQuizThisSession, setHasDismissedTasteQuizThisSession] = useState(false)
+  const [profileStatusMessage, setProfileStatusMessage] = useState('')
   const [deletionNotice, setDeletionNotice] = useState('')
   const [hasAcceptedCookieNotice, setHasAcceptedCookieNotice] = useState(() => {
     if (typeof window === 'undefined') return true
@@ -1181,6 +1918,8 @@ const BrowsePage = () => {
   const favoritesRowRef = useRef(null)
   const _recentlyWatchedRowRef = useRef(null)
   const heroVideoRef = useRef(null)
+  const tasteProfileRef = useRef(DEFAULT_TASTE_PROFILE)
+  const tasteProfileSyncTimeoutRef = useRef(null)
 
   const selectedGenreSet = useMemo(() => new Set(selectedGenreIds), [selectedGenreIds])
   const mediaPluralLabel = useMemo(() => getMediaPluralLabel(mediaFilter), [mediaFilter])
@@ -1215,12 +1954,6 @@ const BrowsePage = () => {
     () => favoriteMovies.map((movie) => getMediaItemKey(movie)),
     [favoriteMovies]
   )
-  const heroQueueItems = useMemo(() => {
-    const selectedQueue = heroQueueMode === 'popular' ? movieList : trendingMovies
-    const fallbackQueue = selectedQueue.length > 0 ? selectedQueue : trendingMovies
-
-    return fallbackQueue.filter((movie) => movie.backdrop_path || movie.poster_path)
-  }, [heroQueueMode, movieList, trendingMovies])
 
   const isAuthenticated = Boolean(authUser)
   const authMode = authMatch?.[1] === 'signup' ? 'signup' : 'login'
@@ -1267,6 +2000,88 @@ const BrowsePage = () => {
   }
 
   const enrichMoviesWithRuntime = (movies) => upsertRuntime(movies, movieRuntimeMap)
+  const activeTasteProfile = useMemo(() => normalizeTasteProfileForApp(tasteProfile), [tasteProfile])
+  const tasteGenreOptions = useMemo(() => getTasteGenreOptions(genreList), [genreList])
+
+  useEffect(() => {
+    tasteProfileRef.current = activeTasteProfile
+  }, [activeTasteProfile])
+
+  useEffect(() => () => {
+    if (tasteProfileSyncTimeoutRef.current) {
+      window.clearTimeout(tasteProfileSyncTimeoutRef.current)
+    }
+  }, [])
+
+  const recommendationItems = useMemo(() => buildRecommendations({
+    movieList,
+    trendingMovies,
+    topRatedMovies,
+    recommendationPoolMovies,
+    favoriteMovies,
+    recentlyWatchedMovies,
+    genreRows,
+    genreList,
+    selectedGenreIds,
+    tasteProfile: activeTasteProfile,
+    runtimeMap: movieRuntimeMap,
+    recommendationLimit: recommendationPoolLimit
+  }), [
+    activeTasteProfile,
+    favoriteMovies,
+    genreList,
+    genreRows,
+    movieList,
+    movieRuntimeMap,
+    recommendationPoolMovies,
+    recommendationPoolLimit,
+    recentlyWatchedMovies,
+    selectedGenreIds,
+    topRatedMovies,
+    trendingMovies
+  ])
+  const personalizedSearchResults = useMemo(() => {
+    if (debouncedSearchTerm.trim().length < SEARCH_MIN_LENGTH) return []
+
+    const rankedResults = buildRecommendations({
+      movieList,
+      trendingMovies: [],
+      topRatedMovies: [],
+      favoriteMovies,
+      recentlyWatchedMovies: [],
+      genreRows: [],
+      genreList,
+      selectedGenreIds,
+      tasteProfile: activeTasteProfile,
+      runtimeMap: movieRuntimeMap
+    })
+    const rankedKeys = new Set(rankedResults.map((movie) => getMediaItemKey(movie)))
+    const remainingResults = movieList.filter((movie) => !rankedKeys.has(getMediaItemKey(movie)))
+
+    return [...rankedResults, ...remainingResults]
+  }, [
+    activeTasteProfile,
+    debouncedSearchTerm,
+    favoriteMovies,
+    genreList,
+    movieList,
+    movieRuntimeMap,
+    selectedGenreIds
+  ])
+  const recommendationAccent = isAuthenticated
+    ? activeTasteProfile.completed_onboarding ? 'Personal picks' : 'Tune your taste'
+    : 'Log in for personal picks'
+  const heroQueueItems = useMemo(() => {
+    const queueByMode = {
+      trending: trendingMovies,
+      popular: movieList,
+      recommended: recommendationItems
+    }
+    const selectedQueue = queueByMode[heroQueueMode] || trendingMovies
+    const fallbackQueue = selectedQueue.length > 0 ? selectedQueue : trendingMovies
+
+    return fallbackQueue.filter((movie) => movie.backdrop_path || movie.poster_path)
+  }, [heroQueueMode, movieList, recommendationItems, trendingMovies])
 
   const fetchGenres = async (selectedMediaFilter) => {
     try {
@@ -1492,6 +2307,7 @@ const BrowsePage = () => {
     genreIds = [],
     selectedMediaFilter = 'movie',
     sortBy = 'popularity.desc',
+    genreSeparator = ',',
     extraParams = {}
   }) => {
     const normalizedQuery = query.trim()
@@ -1515,12 +2331,12 @@ const BrowsePage = () => {
     })
 
     if (genreIds.length > 0 && !normalizedQuery) {
-      params.set('with_genres', genreIds.join(','))
+      params.set('with_genres', genreIds.join(genreSeparator))
     }
 
     const cacheKey = getCacheKey(
       'titles',
-      `load-more:${selectedMediaFilter}:${normalizedQuery}:${genreIds.join(',')}:${sortBy}:${page}:${params.toString()}`
+      `load-more:${selectedMediaFilter}:${normalizedQuery}:${genreIds.join(genreSeparator)}:${sortBy}:${page}:${params.toString()}`
     )
     const data = await fetchJson(
       cacheKey,
@@ -1535,6 +2351,70 @@ const BrowsePage = () => {
     return {
       items: normalizeMediaList(data.results || [], selectedMediaFilter),
       totalPages: Math.min(data.total_pages || 1, 500)
+    }
+  }
+
+  const loadMoreRecommendedTitles = async () => {
+    const startPage = (beltPages.recommendations || 1) + 1
+    setRecommendationPoolLimit((currentLimit) =>
+      Math.min(currentLimit + RECOMMENDATION_POOL_CLICK_INCREMENT, MAX_RECOMMENDATION_POOL_LIMIT)
+    )
+    const recommendationGenreIds = getRecommendationDiscoverGenreIds({
+      genreList,
+      selectedGenreIds,
+      tasteProfile: tasteProfileRef.current
+    })
+    const ignoredKeys = new Set(tasteProfileRef.current.ignored_title_keys)
+    const knownKeys = new Set([
+      ...recommendationPoolMovies,
+      ...recommendationItems
+    ].map((movie) => getMediaItemKey(movie)))
+    const loadedItems = []
+    let lastCheckedPage = startPage - 1
+    let reachedEnd = false
+
+    try {
+      for (let pageOffset = 0; pageOffset < 3; pageOffset += 1) {
+        const page = startPage + pageOffset
+        const { items, totalPages: nextTotalPages } = await fetchTitlePage({
+          page,
+          genreIds: recommendationGenreIds,
+          selectedMediaFilter: mediaFilter,
+          sortBy: 'popularity.desc',
+          genreSeparator: '|',
+          extraParams: { 'vote_count.gte': '40' }
+        })
+
+        lastCheckedPage = page
+
+        if (page >= nextTotalPages) {
+          reachedEnd = true
+        }
+
+        items.forEach((item) => {
+          const itemKey = getMediaItemKey(item)
+          if (ignoredKeys.has(itemKey) || knownKeys.has(itemKey)) return
+
+          knownKeys.add(itemKey)
+          loadedItems.push(item)
+        })
+
+        if (loadedItems.length > 0 || reachedEnd) break
+      }
+
+      if (lastCheckedPage >= startPage) {
+        setBeltPages((currentPages) => ({ ...currentPages, recommendations: lastCheckedPage }))
+      }
+
+      if (loadedItems.length === 0) return false
+
+      setRecommendationPoolMovies((currentMovies) =>
+        appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(loadedItems))
+      )
+      return true
+    } catch (error) {
+      console.log(`Error loading more recommended titles: ${error}`)
+      return false
     }
   }
 
@@ -1708,6 +2588,148 @@ const BrowsePage = () => {
     }
   }
 
+  const loadTasteProfile = async () => {
+    if (!isAuthenticated || !authUser?.id) {
+      setTasteProfile(DEFAULT_TASTE_PROFILE)
+      setHasDismissedTasteQuizThisSession(false)
+      setProfileStatusMessage('')
+      return
+    }
+
+    const metadataProfile = authUser.user_metadata?.taste_profile
+    const localProfile = getLocalTasteProfile(authUser.id)
+    const initialProfile = normalizeTasteProfileForApp(metadataProfile || localProfile || DEFAULT_TASTE_PROFILE)
+
+    setTasteProfile(initialProfile)
+    setHasDismissedTasteQuizThisSession(getHasDismissedTasteQuiz(authUser.id))
+
+    try {
+      const data = await authApi.getTasteProfile(authUser.id)
+      const remoteProfile = data?.profile
+
+      if (remoteProfile) {
+        const normalizedRemoteProfile = normalizeTasteProfileForApp(remoteProfile)
+        setTasteProfile(normalizedRemoteProfile)
+        setLocalTasteProfile(authUser.id, normalizedRemoteProfile)
+      }
+    } catch (error) {
+      console.log(`Error loading taste profile: ${error}`)
+    }
+  }
+
+  const saveTasteProfile = async (profile, { closeQuiz = false, syncAccount = true } = {}) => {
+    const nextProfile = normalizeTasteProfileForApp({
+      ...profile,
+      completed_onboarding: true,
+      updated_at: new Date().toISOString()
+    })
+
+    setTasteProfile(nextProfile)
+    setProfileStatusMessage('')
+
+    if (syncAccount && tasteProfileSyncTimeoutRef.current) {
+      window.clearTimeout(tasteProfileSyncTimeoutRef.current)
+      tasteProfileSyncTimeoutRef.current = null
+    }
+
+    if (authUser?.id) {
+      setLocalTasteProfile(authUser.id, nextProfile)
+    }
+
+    if (closeQuiz) {
+      setRecommendationPoolMovies([])
+      setRecommendationPoolLimit(INITIAL_RECOMMENDATION_POOL_LIMIT)
+      setBeltPages((currentPages) => ({ ...currentPages, recommendations: 1 }))
+      setBeltVisibleCounts((currentCounts) => ({ ...currentCounts, recommendations: INITIAL_BELT_ITEM_COUNT }))
+      setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+    }
+
+    if (!syncAccount || !isAuthenticated || !authUser?.id) {
+      if (closeQuiz) setIsTasteQuizOpen(false)
+      return true
+    }
+
+    setIsSavingTasteProfile(true)
+
+    try {
+      const data = await authApi.saveTasteProfile(authUser.id, nextProfile)
+      const savedProfile = normalizeTasteProfileForApp(data.profile)
+
+      setTasteProfile(savedProfile)
+      setLocalTasteProfile(authUser.id, savedProfile)
+      if (data.user) setAuthUser(data.user)
+      setProfileStatusMessage('Taste profile saved.')
+      if (closeQuiz) setIsTasteQuizOpen(false)
+      return true
+    } catch (error) {
+      console.log(`Error saving taste profile: ${error}`)
+      setProfileStatusMessage('Saved on this device. Account sync can retry later.')
+      if (closeQuiz) setIsTasteQuizOpen(false)
+      return false
+    } finally {
+      setIsSavingTasteProfile(false)
+    }
+  }
+
+  const queueTasteProfileSync = (profile) => {
+    if (!isAuthenticated || !authUser?.id) return
+
+    if (tasteProfileSyncTimeoutRef.current) {
+      window.clearTimeout(tasteProfileSyncTimeoutRef.current)
+    }
+
+    const profileToSync = normalizeTasteProfileForApp(profile)
+    tasteProfileSyncTimeoutRef.current = window.setTimeout(() => {
+      tasteProfileSyncTimeoutRef.current = null
+      saveTasteProfile(profileToSync)
+    }, TASTE_PROFILE_SYNC_DEBOUNCE_MS)
+  }
+
+  const dismissTasteQuiz = () => {
+    if (authUser?.id) {
+      setHasDismissedTasteQuiz(authUser.id)
+    }
+
+    setHasDismissedTasteQuizThisSession(true)
+    setIsTasteQuizOpen(false)
+  }
+
+  const openTasteQuizFromProfile = () => {
+    setProfileStatusMessage('')
+    setIsProfilePanelOpen(false)
+    setIsTasteQuizOpen(true)
+  }
+
+  const hideRecommendationTitle = (movie) => {
+    const currentVisibleCount = beltVisibleCounts.recommendations || INITIAL_BELT_ITEM_COUNT
+    const currentProfile = tasteProfileRef.current
+    const nextIgnoredKeys = [...new Set([
+      ...currentProfile.ignored_title_keys,
+      getMediaItemKey(movie)
+    ])]
+    const nextProfile = {
+      ...currentProfile,
+      ignored_title_keys: nextIgnoredKeys
+    }
+
+    setBeltVisibleCounts((currentCounts) => ({
+      ...currentCounts,
+      recommendations: Math.min(Math.max(currentVisibleCount, INITIAL_BELT_ITEM_COUNT), Math.max(recommendationItems.length - 1, INITIAL_BELT_ITEM_COUNT))
+    }))
+    saveTasteProfile(nextProfile, { syncAccount: false })
+    queueTasteProfileSync(nextProfile)
+    setProfileStatusMessage('Hidden from recommendations.')
+  }
+
+  const clearHiddenRecommendationTitles = () => {
+    saveTasteProfile({
+      ...activeTasteProfile,
+      ignored_title_keys: []
+    })
+    setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+    setProfileStatusMessage('Hidden picks cleared.')
+  }
+
   const toggleFavoriteMovie = async (movie) => {
     if (!isAuthenticated) {
       setAuthErrorMessage('')
@@ -1827,6 +2849,31 @@ const BrowsePage = () => {
     } catch (error) {
       console.log(`Error clearing watch history: ${error}`)
       setRecentlyWatchedMovies(previousItems)
+    }
+  }
+
+  const clearWatchHistoryFromSettings = async () => {
+    await clearWatchHistory()
+    setProfileStatusMessage('Watch history cleared.')
+  }
+
+  const requestPasswordResetFromSettings = async () => {
+    if (!authUser?.email) {
+      setProfileStatusMessage('No account email is available for password reset.')
+      return
+    }
+
+    setIsPasswordResetSending(true)
+    setProfileStatusMessage('')
+
+    try {
+      await authApi.requestPasswordReset(authUser.email)
+      setProfileStatusMessage('Password reset email sent. Check your inbox.')
+    } catch (error) {
+      console.log(`Error requesting password reset: ${error}`)
+      setProfileStatusMessage('Could not send reset email right now. Please try again shortly.')
+    } finally {
+      setIsPasswordResetSending(false)
     }
   }
 
@@ -1994,14 +3041,50 @@ const BrowsePage = () => {
   useEffect(() => {
     loadFavoriteMovies()
     loadRecentlyWatched()
+    loadTasteProfile()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated])
+  }, [isAuthenticated, authUser?.id])
+
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !authUser?.id ||
+      isAuthRouteOpen ||
+      activeTasteProfile.completed_onboarding ||
+      isTasteQuizOpen ||
+      hasDismissedTasteQuizThisSession ||
+      getHasDismissedTasteQuiz(authUser.id)
+    ) {
+      return undefined
+    }
+
+    const quizTimer = window.setTimeout(() => {
+      setIsTasteQuizOpen(true)
+    }, 10000)
+
+    return () => {
+      window.clearTimeout(quizTimer)
+    }
+  }, [
+    activeTasteProfile.completed_onboarding,
+    authUser?.id,
+    hasDismissedTasteQuizThisSession,
+    isAuthRouteOpen,
+    isAuthenticated,
+    isTasteQuizOpen
+  ])
 
   useEffect(() => {
     setBeltVisibleCounts({})
     setLoadingMoreBeltKeys([])
     setExhaustedBeltKeys([])
   }, [debouncedSearchTerm, mediaFilter, selectedGenreIds])
+
+  useEffect(() => {
+    setRecommendationPoolMovies([])
+    setRecommendationPoolLimit(INITIAL_RECOMMENDATION_POOL_LIMIT)
+    setBeltPages((currentPages) => ({ ...currentPages, recommendations: 1 }))
+  }, [mediaFilter, selectedGenreIds])
 
   useEffect(() => {
     fetchGenres(mediaFilter)
@@ -2041,6 +3124,15 @@ const BrowsePage = () => {
   useEffect(() => {
     setHeroIndex(0)
   }, [heroQueueMode, mediaFilter])
+
+  useEffect(() => {
+    if (heroQueueMode !== 'recommended') return
+
+    setHeroIndex((currentIndex) => {
+      if (recommendationItems.length === 0) return 0
+      return Math.min(currentIndex, recommendationItems.length - 1)
+    })
+  }, [heroQueueMode, recommendationItems.length])
 
   useEffect(() => {
     let isActive = true
@@ -2139,6 +3231,11 @@ const BrowsePage = () => {
   }, [topRatedMovies])
 
   useEffect(() => {
+    if (recommendationPoolMovies.length > 0) fetchMovieRuntimes(recommendationPoolMovies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recommendationPoolMovies])
+
+  useEffect(() => {
     if (favoriteMovies.length > 0) fetchMovieRuntimes(favoriteMovies)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [favoriteMovies])
@@ -2158,6 +3255,8 @@ const BrowsePage = () => {
         : await authApi.login(payload)
 
       setAuthUser(data?.user || null)
+      setHasDismissedTasteQuizThisSession(false)
+      setProfileStatusMessage('')
       navigate('/')
       return true
     } catch (error) {
@@ -2177,6 +3276,11 @@ const BrowsePage = () => {
       setAuthUser(null)
       setFavoriteMovies([])
       setRecentlyWatchedMovies([])
+      setTasteProfile(DEFAULT_TASTE_PROFILE)
+      setIsTasteQuizOpen(false)
+      setIsProfilePanelOpen(false)
+      setProfileStatusMessage('')
+      setHasDismissedTasteQuizThisSession(false)
     }
   }
 
@@ -2201,6 +3305,9 @@ const BrowsePage = () => {
         setAuthUser(null)
         setFavoriteMovies([])
         setRecentlyWatchedMovies([])
+        setTasteProfile(DEFAULT_TASTE_PROFILE)
+        setIsTasteQuizOpen(false)
+        setIsProfilePanelOpen(false)
         setDeletionNotice('Your account, favorites, and recently watched history have been permanently deleted. You have been signed out.')
       })
       .catch((error) => {
@@ -2413,7 +3520,7 @@ const BrowsePage = () => {
       onLoadMore: loadMorePopularTitles
     }
   ]
-  const searchResults = debouncedSearchTerm.trim().length >= SEARCH_MIN_LENGTH ? movieList : []
+  const searchResults = debouncedSearchTerm.trim().length >= SEARCH_MIN_LENGTH ? personalizedSearchResults : []
 
   if (legalDocumentType) {
     return (
@@ -2488,9 +3595,9 @@ const BrowsePage = () => {
           </button>
 
           {isAuthenticated ? (
-            <button type="button" className="stream-nav-icon" onClick={handleLogout} aria-label="Log out">
-              <LogOutIcon className="stream-nav-svg" />
-              <span className="stream-nav-label">Logout</span>
+            <button type="button" className="stream-nav-icon" onClick={() => setIsProfilePanelOpen(true)} aria-label="Open profile">
+              <UserIcon className="stream-nav-svg" />
+              <span className="stream-nav-label">Profile</span>
             </button>
           ) : (
             <button
@@ -2620,13 +3727,21 @@ const BrowsePage = () => {
             >
               Popular
             </button>
+            <button
+              type="button"
+              className={heroQueueMode === 'recommended' ? 'is-active' : ''}
+              onClick={() => setHeroQueueMode('recommended')}
+              aria-pressed={heroQueueMode === 'recommended'}
+            >
+              For You
+            </button>
           </div>
 
           <button
             type="button"
             className="stream-hero-cycle is-prev"
             onClick={() => changeHeroTitle(-1)}
-            aria-label="Previous trending trailer"
+            aria-label="Previous featured trailer"
           >
             ‹
           </button>
@@ -2635,7 +3750,7 @@ const BrowsePage = () => {
             type="button"
             className="stream-hero-cycle is-next"
             onClick={() => changeHeroTitle(1)}
-            aria-label="Next trending trailer"
+            aria-label="Next featured trailer"
           >
             ›
           </button>
@@ -2690,6 +3805,39 @@ const BrowsePage = () => {
         </button>
 
         <section className="stream-belts" aria-label="Browse rows" ref={browseRowsRef}>
+          <ContentBelt
+            title="Recommended For You"
+            items={recommendationItems}
+            accent={recommendationAccent}
+            headingAction={(
+              <button
+                type="button"
+                className="content-belt-heading-action"
+                onClick={() => {
+                  if (!isAuthenticated) {
+                    setAuthErrorMessage('')
+                    navigate('/account/login')
+                    return
+                  }
+
+                  setIsTasteQuizOpen(true)
+                }}
+              >
+                {isAuthenticated ? 'Tune Taste' : 'Log in'}
+              </button>
+            )}
+            beltKey="recommendations"
+            onOpenTitle={openTitleDetails}
+            onDismissTitle={isAuthenticated ? hideRecommendationTitle : undefined}
+            onLoadMore={loadMoreRecommendedTitles}
+            beltVisibleCounts={beltVisibleCounts}
+            setBeltVisibleCounts={setBeltVisibleCounts}
+            loadingMoreBeltKeys={loadingMoreBeltKeys}
+            setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+            exhaustedBeltKeys={exhaustedBeltKeys}
+            setExhaustedBeltKeys={setExhaustedBeltKeys}
+          />
+
           <ContinueWatchingSection />
 
           {heroRows.map((row) => (
@@ -2766,6 +3914,38 @@ const BrowsePage = () => {
           onClose={closeTitleDetails}
         />
       )}
+
+      {isTasteQuizOpen && (
+        <TasteQuizModal
+          profile={activeTasteProfile}
+          genreOptions={tasteGenreOptions}
+          onSave={(profile) => saveTasteProfile(profile, { closeQuiz: true })}
+          onDismiss={dismissTasteQuiz}
+          isSaving={isSavingTasteProfile}
+        />
+      )}
+
+      <ProfilePanel
+        isOpen={isProfilePanelOpen}
+        user={authUser}
+        profile={activeTasteProfile}
+        genreList={genreList}
+        favoriteCount={favoriteMovies.length}
+        historyCount={recentlyWatchedMovies.length}
+        recommendationCount={recommendationItems.length}
+        recommendationPoolTarget={recommendationPoolLimit}
+        hiddenPickCount={activeTasteProfile.ignored_title_keys.length}
+        isTrustedDevice={Boolean(authUser?.id && authApi.isTrustedDeviceSessionActive(authUser.id))}
+        isPasswordResetSending={isPasswordResetSending}
+        statusMessage={profileStatusMessage}
+        onClose={() => setIsProfilePanelOpen(false)}
+        onOpenTasteQuiz={openTasteQuizFromProfile}
+        onClearHiddenPicks={clearHiddenRecommendationTitles}
+        onClearWatchHistory={clearWatchHistoryFromSettings}
+        onRequestPasswordReset={requestPasswordResetFromSettings}
+        onRequestDataDeletion={handleDeletionRequest}
+        onLogout={handleLogout}
+      />
     </AppShell>
   )
 

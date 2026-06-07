@@ -664,8 +664,16 @@
     transform: translate3d(0, 0, 0) scale(1.045);
   }
 
+  .belt-card-dismiss {
+    @apply absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-white/16 bg-black/42 text-xl font-black leading-none text-white shadow-md shadow-black/20 backdrop-blur-sm transition hover:bg-white hover:text-black focus:outline-hidden focus:ring-2 focus:ring-white/35;
+  }
+
   .belt-card-title {
     @apply mt-2 truncate px-1 pb-1 text-sm font-black text-white sm:text-base;
+  }
+
+  .content-belt-heading-action {
+    @apply inline-flex min-h-9 items-center justify-center rounded-full border border-white/12 bg-white/8 px-3.5 text-xs font-black uppercase tracking-[0.12em] text-white/70 transition hover:bg-white hover:text-black focus:outline-hidden focus:ring-2 focus:ring-white/30;
   }
 
   .content-belt-load-more {
@@ -688,6 +696,231 @@
 
   .stream-belt-loading {
     @apply flex min-h-44 items-center justify-center rounded-xl border border-white/8 bg-white/[0.035] shadow-xl shadow-black/15;
+  }
+
+  .taste-modal-backdrop,
+  .profile-panel-backdrop {
+    @apply fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-4 backdrop-blur-md;
+  }
+
+  .taste-modal,
+  .profile-panel {
+    @apply w-full overflow-hidden rounded-xl border border-white/12 bg-[#050505]/92 text-left text-white shadow-2xl shadow-black/60 backdrop-blur-xl;
+  }
+
+  .taste-modal {
+    @apply flex max-h-[92dvh] max-w-5xl flex-col;
+  }
+
+  .taste-modal-header,
+  .profile-panel-header {
+    @apply flex items-start gap-4 border-b border-white/10 px-5 py-4;
+  }
+
+  .taste-modal-header > div,
+  .profile-panel-header > div:not(.profile-avatar) {
+    @apply min-w-0 flex-1;
+  }
+
+  .taste-modal-header p,
+  .profile-panel-header p {
+    @apply text-[11px] font-black uppercase tracking-[0.22em] text-white/44;
+  }
+
+  .taste-modal-header h2,
+  .profile-panel-header h2 {
+    @apply m-0 mt-1 max-w-none text-left text-3xl font-black leading-none text-white;
+  }
+
+  .profile-panel-header span {
+    @apply mt-2 block truncate text-sm font-semibold text-white/54;
+  }
+
+  .taste-modal-header button,
+  .profile-panel-close {
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/12 bg-white/8 text-2xl font-black leading-none text-white transition hover:bg-white hover:text-black focus:outline-hidden focus:ring-2 focus:ring-white/35;
+  }
+
+  .taste-modal-scroll {
+    @apply min-h-0 flex-1 overflow-y-auto px-5 py-5;
+  }
+
+  .taste-question {
+    @apply rounded-lg border border-white/8 bg-white/[0.035] px-4 py-4;
+  }
+
+  .taste-question + .taste-question,
+  .taste-question-grid {
+    @apply mt-4;
+  }
+
+  .taste-question h3 {
+    @apply mb-3 text-base font-black text-white;
+  }
+
+  .taste-question-grid {
+    @apply grid gap-4 lg:grid-cols-3;
+  }
+
+  .taste-chip-grid {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .taste-chip-grid button,
+  .taste-segmented button {
+    @apply inline-flex min-h-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.045] px-4 text-sm font-black text-white/72 transition hover:bg-white/10 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-white/25;
+  }
+
+  .taste-chip-grid button.is-active,
+  .taste-segmented button.is-active {
+    @apply bg-white text-black shadow-lg shadow-white/10;
+  }
+
+  .taste-segmented {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .taste-modal-actions {
+    @apply flex flex-col gap-3 border-t border-white/10 px-5 py-4 sm:flex-row sm:justify-end;
+  }
+
+  .taste-primary-action,
+  .taste-secondary-action,
+  .profile-actions button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-full px-5 text-sm font-black transition focus:outline-hidden focus:ring-2 focus:ring-white/35;
+  }
+
+  .taste-primary-action {
+    @apply bg-white text-black hover:bg-white/84 disabled:cursor-wait disabled:opacity-55;
+  }
+
+  .taste-secondary-action,
+  .profile-inline-actions button {
+    @apply border border-white/12 bg-white/7 text-white/78 hover:bg-white hover:text-black;
+  }
+
+  .profile-panel {
+    @apply flex max-h-[92dvh] max-w-3xl flex-col;
+  }
+
+  .profile-avatar {
+    @apply flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/12 bg-white text-black shadow-xl shadow-white/10;
+  }
+
+  .profile-avatar svg {
+    @apply h-7 w-7;
+  }
+
+  .profile-settings-block {
+    @apply rounded-xl border border-white/8 bg-white/[0.035] px-4 py-4;
+  }
+
+  .account-settings-scroll {
+    @apply min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5;
+  }
+
+  .account-setting-list {
+    @apply mt-3 grid gap-2;
+  }
+
+  .account-setting-list div {
+    @apply flex min-h-11 items-center justify-between gap-4 rounded-lg border border-white/8 bg-black/20 px-3 py-2;
+  }
+
+  .account-setting-list span {
+    @apply text-[11px] font-black uppercase tracking-[0.16em] text-white/42;
+  }
+
+  .account-setting-list strong {
+    @apply min-w-0 truncate text-sm font-black text-white/76;
+  }
+
+  .settings-row-list {
+    @apply mt-3 grid gap-2;
+  }
+
+  .settings-row-list-spaced {
+    @apply mt-4;
+  }
+
+  .settings-row {
+    @apply grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-lg border border-white/8 bg-black/22 px-3 py-2.5;
+  }
+
+  .settings-row > div {
+    @apply min-w-0;
+  }
+
+  .settings-row span {
+    @apply block text-[11px] font-black uppercase tracking-[0.16em] text-white/42;
+  }
+
+  .settings-row strong {
+    @apply mt-1 block truncate text-sm font-black text-white/78;
+  }
+
+  .settings-row-action {
+    @apply inline-flex min-h-9 shrink-0 items-center justify-center rounded-full border border-white/12 bg-white/7 px-3.5 text-xs font-black text-white/78 transition hover:bg-white hover:text-black focus:outline-hidden focus:ring-2 focus:ring-white/35 disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .settings-row-danger {
+    @apply border-red-300/12 bg-red-950/10;
+  }
+
+  .settings-row-danger-action {
+    @apply border-red-300/20 text-red-100/78 hover:bg-red-100 hover:text-red-950;
+  }
+
+  .profile-block-heading {
+    @apply flex items-center gap-2 text-white;
+  }
+
+  .profile-block-heading svg {
+    @apply h-4 w-4 text-white/58;
+  }
+
+  .profile-block-heading h3 {
+    @apply text-base font-black;
+  }
+
+  .profile-taste-tags {
+    @apply mt-3 flex flex-wrap gap-2;
+  }
+
+  .profile-taste-tags span {
+    @apply rounded-full border border-white/10 bg-white/[0.055] px-3 py-1.5 text-xs font-black uppercase tracking-[0.08em] text-white/62;
+  }
+
+  .profile-inline-actions {
+    @apply mt-4 flex flex-wrap gap-2;
+  }
+
+  .profile-inline-actions button {
+    @apply inline-flex min-h-10 items-center justify-center rounded-full px-4 text-xs font-black transition focus:outline-hidden focus:ring-2 focus:ring-white/35 disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .profile-danger-block {
+    @apply border-white/12 bg-white/[0.028];
+  }
+
+  .profile-status-message {
+    @apply mx-5 mt-4 rounded-lg border border-white/10 bg-white/[0.045] px-4 py-3 text-sm font-semibold text-white/68;
+  }
+
+  .profile-actions {
+    @apply flex flex-col gap-3 border-t border-white/10 px-5 py-5 sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .profile-actions button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-full px-5 text-sm font-black transition focus:outline-hidden focus:ring-2 focus:ring-white/35;
+  }
+
+  .profile-actions button:not(.profile-logout-action) {
+    @apply bg-white text-black hover:bg-white/84;
+  }
+
+  .profile-logout-action {
+    @apply border border-white/12 bg-white/7 text-white/78 hover:bg-white hover:text-black;
   }
 
   .stream-footer {
@@ -807,6 +1040,61 @@
 
     .belt-card {
       @apply w-[16rem];
+    }
+
+    .content-belt-heading {
+      @apply flex-wrap;
+    }
+
+    .content-belt-heading-action {
+      @apply order-3 min-h-8 px-3 text-[10px];
+    }
+
+    .taste-modal-backdrop,
+    .profile-panel-backdrop {
+      @apply px-3 py-3;
+    }
+
+    .taste-modal {
+      @apply max-h-[94dvh];
+    }
+
+    .taste-modal-header,
+    .profile-panel-header {
+      @apply px-4 py-3;
+    }
+
+    .taste-modal-scroll {
+      @apply px-4 py-4;
+    }
+
+    .taste-modal-header h2,
+    .profile-panel-header h2 {
+      @apply text-2xl;
+    }
+
+    .account-settings-scroll {
+      @apply px-4;
+    }
+
+    .profile-settings-block {
+      @apply px-3 py-3;
+    }
+
+    .account-setting-list div {
+      @apply flex-col items-start gap-1;
+    }
+
+    .settings-row {
+      @apply grid-cols-1 items-start gap-2;
+    }
+
+    .settings-row-action {
+      @apply justify-self-start;
+    }
+
+    .profile-actions {
+      @apply px-4;
     }
   }
 

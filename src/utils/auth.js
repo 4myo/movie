@@ -5,6 +5,9 @@ const FAVORITES_TABLE = 'favorite_movies'
 const RECENTLY_WATCHED_TABLE = 'recently_watched'
 const TRUSTED_DEVICE_STORAGE_KEY = 'movieslo-trusted-device-v1'
 const TRUSTED_DEVICE_DURATION_MS = 30 * 24 * 60 * 60 * 1000
+const TASTE_PROFILE_METADATA_KEY = 'taste_profile'
+const TASTE_PROFILE_UPDATED_AT_KEY = 'taste_profile_updated_at'
+const MAX_IGNORED_TITLE_KEYS = 1000
 const getStoredMediaType = (movie) => (movie?.media_type === 'tv' ? 'tv' : 'movie')
 const getStoredMovieId = (movie) => {
   const movieId = Number(movie?.id)
@@ -17,6 +20,35 @@ const getStoredMovieId = (movie) => {
 }
 const normalizeEmail = (email = '') => email.trim().toLowerCase()
 const sanitizeDisplayName = (name = '') => name.trim().replace(/\s+/g, ' ').slice(0, 80)
+const sanitizeStringArray = (values = [], limit = 12) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => String(value).trim().toLowerCase()).filter(Boolean))].slice(0, limit)
+    : []
+const sanitizeNumberArray = (values = [], limit = 16) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isSafeInteger(value) && value > 0))].slice(0, limit)
+    : []
+const normalizeTasteProfile = (profile = {}) => {
+  const preferredMediaTypes = ['movie', 'tv', 'both']
+  const releasePreferences = ['new', 'classic', 'mixed']
+  const runtimePreferences = ['short', 'standard', 'long', 'any']
+
+  return {
+    completed_onboarding: Boolean(profile.completed_onboarding),
+    preferred_genre_ids: sanitizeNumberArray(profile.preferred_genre_ids),
+    disliked_genre_ids: sanitizeNumberArray(profile.disliked_genre_ids, 10),
+    preferred_moods: sanitizeStringArray(profile.preferred_moods, 8),
+    preferred_media_type: preferredMediaTypes.includes(profile.preferred_media_type) ? profile.preferred_media_type : 'both',
+    release_preference: releasePreferences.includes(profile.release_preference) ? profile.release_preference : 'mixed',
+    runtime_preference: runtimePreferences.includes(profile.runtime_preference) ? profile.runtime_preference : 'any',
+    ignored_title_keys: sanitizeStringArray(profile.ignored_title_keys, MAX_IGNORED_TITLE_KEYS),
+    updated_at: profile.updated_at || new Date().toISOString()
+  }
+}
+const getStoredTasteProfile = (user) => {
+  const storedProfile = user?.user_metadata?.[TASTE_PROFILE_METADATA_KEY]
+  return storedProfile && typeof storedProfile === 'object' ? normalizeTasteProfile(storedProfile) : null
+}
 const getDeviceType = () => {
   if (typeof window === 'undefined') return 'unknown'
 
@@ -193,6 +225,24 @@ export const authApi = {
     }
 
     return { user: data.user }
+  },
+
+  requestPasswordReset: async (email) => {
+    const safeEmail = normalizeEmail(email)
+
+    if (!safeEmail) {
+      throw new Error('Account email is missing.')
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(safeEmail, {
+      redirectTo: typeof window === 'undefined' ? undefined : `${window.location.origin}/account/login`
+    })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return { success: true }
   },
 
   logout: async () => {
@@ -398,5 +448,39 @@ export const authApi = {
     }
 
     return { success: true }
+  },
+
+  getTasteProfile: async (userId) => {
+    const verifiedUser = await requireVerifiedUser(userId)
+
+    return {
+      profile: getStoredTasteProfile(verifiedUser)
+    }
+  },
+
+  saveTasteProfile: async (userId, profile) => {
+    await requireVerifiedUser(userId)
+
+    const nextProfile = normalizeTasteProfile({
+      ...profile,
+      completed_onboarding: true,
+      updated_at: new Date().toISOString()
+    })
+
+    const { data, error } = await supabase.auth.updateUser({
+      data: {
+        [TASTE_PROFILE_METADATA_KEY]: nextProfile,
+        [TASTE_PROFILE_UPDATED_AT_KEY]: nextProfile.updated_at
+      }
+    })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return {
+      profile: nextProfile,
+      user: data.user
+    }
   }
 }
