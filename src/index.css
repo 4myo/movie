@@ -171,7 +171,8 @@
     @apply bg-white text-black shadow-lg shadow-white/10;
   }
 
-  .stream-nav-item.is-active-soft {
+  .stream-nav-item.is-active-soft,
+  .stream-nav-icon.is-active-soft {
     @apply bg-white/10 text-white;
   }
 
@@ -232,6 +233,33 @@
 
   .stream-search-message {
     @apply mt-5 text-sm font-medium text-white/65;
+  }
+
+  .stream-person-results {
+    @apply mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .stream-person-result {
+    @apply grid min-w-0 grid-cols-[3.75rem_minmax(0,1fr)] items-center gap-3 rounded-lg border border-white/10 bg-white/[0.045] p-2 text-left transition hover:bg-white/10 focus:outline-hidden focus:ring-2 focus:ring-white/25;
+  }
+
+  .stream-person-result img {
+    @apply h-16 w-16 rounded-md object-cover;
+  }
+
+  .stream-person-result span {
+    @apply min-w-0;
+  }
+
+  .stream-person-result strong {
+    @apply block truncate text-sm font-black text-white;
+  }
+
+  .stream-person-result small {
+    @apply mt-1 block overflow-hidden text-xs font-semibold leading-5 text-white/52;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
   }
 
   .stream-search-results {
@@ -692,6 +720,34 @@
 
   .content-belt-load-more span {
     @apply inline-flex min-h-10 items-center justify-center rounded-full border border-transparent bg-gray-300 px-5 text-black;
+  }
+
+  .belt-card-watchlist {
+    @apply absolute bottom-12 left-2.5 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/16 bg-black/48 text-lg font-black leading-none text-white shadow-md shadow-black/25 backdrop-blur-sm transition hover:bg-white hover:text-black focus:outline-hidden focus:ring-2 focus:ring-white/35;
+  }
+
+  .belt-card-watchlist.is-active {
+    @apply bg-white text-black;
+  }
+
+  .watchlist-empty-state {
+    @apply mx-auto flex min-h-72 max-w-xl flex-col items-center justify-center rounded-xl border border-white/10 bg-white/[0.035] px-6 py-10 text-center shadow-xl shadow-black/20;
+  }
+
+  .watchlist-empty-state svg {
+    @apply h-10 w-10 text-white/70;
+  }
+
+  .watchlist-empty-state h2 {
+    @apply mt-4 text-2xl font-black text-white;
+  }
+
+  .watchlist-empty-state p {
+    @apply mt-2 max-w-sm text-sm font-semibold leading-6 text-white/58;
+  }
+
+  .watchlist-empty-state button {
+    @apply mt-5 inline-flex min-h-10 items-center justify-center rounded-full bg-white px-5 text-sm font-black text-black transition hover:bg-white/84 focus:outline-hidden focus:ring-2 focus:ring-white/35;
   }
 
   .stream-belt-loading {

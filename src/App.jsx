@@ -6,6 +6,7 @@ import MovieModal from './components/MovieModal.jsx'
 import { AuthPage } from './components/AuthModal.jsx'
 import LegalPage from './components/LegalPage.jsx'
 import {
+  BookmarkIcon,
   HomeIcon,
   LogInIcon,
   LogOutIcon,
@@ -53,6 +54,9 @@ const PERSISTENT_CACHE_KEYS = [
   'default-genre-rows:',
   'genre-row:',
   'genres:',
+  'people:',
+  'person-credits:',
+  'title-search:',
   'titles:',
   'top-rated:',
   'trending:'
@@ -64,7 +68,13 @@ const MAX_IGNORED_TITLE_KEYS = 1000
 const INITIAL_RECOMMENDATION_POOL_LIMIT = 120
 const RECOMMENDATION_POOL_CLICK_INCREMENT = 80
 const MAX_RECOMMENDATION_POOL_LIMIT = 1000
+const RECOMMENDATION_PAGE_SCAN_LIMIT = 12
+const RECOMMENDATION_FRESH_BATCH_TARGET = 10
+const RECOMMENDATION_ROTATION_WINDOW_MS = 5 * 24 * 60 * 60 * 1000
+const RECOMMENDATION_ROTATION_REFRESH_MS = 60 * 60 * 1000
+const RECOMMENDATION_ROTATION_JITTER = 24
 const TASTE_PROFILE_SYNC_DEBOUNCE_MS = 3200
+const MAX_PREFERRED_PEOPLE = 12
 const responseCache = new Map()
 const DEFAULT_TASTE_PROFILE = {
   completed_onboarding: false,
@@ -74,7 +84,8 @@ const DEFAULT_TASTE_PROFILE = {
   preferred_media_type: 'both',
   release_preference: 'mixed',
   runtime_preference: 'any',
-  ignored_title_keys: []
+  ignored_title_keys: [],
+  preferred_people: []
 }
 const TASTE_MOOD_OPTIONS = [
   { id: 'scary', label: 'Scary', genres: ['Horror', 'Mystery', 'Thriller'] },
@@ -165,6 +176,27 @@ const WATCH_HISTORY_STORAGE_PREFIX = 'movie-browser:watch-history:v1:'
 
 const clampNumber = (value, min = 0, max = Number.POSITIVE_INFINITY) =>
   Math.min(Math.max(Number.isFinite(value) ? value : min, min), max)
+
+const getRecommendationRotationWindow = (now = Date.now()) =>
+  Math.floor(now / RECOMMENDATION_ROTATION_WINDOW_MS)
+
+const getStableHashValue = (value = '') => {
+  let hash = 2166136261
+  const normalizedValue = String(value)
+
+  for (let index = 0; index < normalizedValue.length; index += 1) {
+    hash ^= normalizedValue.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return (hash >>> 0) / 4294967295
+}
+
+const getRecommendationRotationScore = (seed, itemKey) => {
+  if (!seed) return 0
+
+  return (getStableHashValue(`${seed}:${itemKey}`) - 0.5) * RECOMMENDATION_ROTATION_JITTER
+}
 
 const getResumeTimeSeconds = (item) => clampNumber(Number(item?.resume_time_seconds || 0))
 
@@ -298,6 +330,9 @@ const getBackdropUrl = (item, size = 'w1280') => {
 const getPosterUrl = (item, size = 'w500') =>
   item?.poster_path ? `${imageBaseUrl}${size}${item.poster_path}` : '/no-movie.png'
 
+const getProfileUrl = (person, size = 'w185') =>
+  person?.profile_path ? `${imageBaseUrl}${size}${person.profile_path}` : '/no-movie.png'
+
 const HERO_VIDEO_BLOCKLIST_PATTERN = /\b(shorts?|vertical|portrait|reel|tiktok|phone)\b/i
 
 const getHeroVideoScore = (video) => {
@@ -430,6 +465,26 @@ const uniqueNumberValues = (values = [], limit = 20) =>
     ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isSafeInteger(value) && value > 0))].slice(0, limit)
     : []
 
+const normalizePreferredPeople = (people = []) => {
+  if (!Array.isArray(people)) return []
+
+  const seenPersonIds = new Set()
+  return people
+    .map((person) => ({
+      id: Number(person?.id),
+      name: String(person?.name || '').trim().slice(0, 80),
+      profile_path: person?.profile_path ? String(person.profile_path).slice(0, 120) : '',
+      known_for_department: String(person?.known_for_department || '').trim().slice(0, 40),
+      searched_at: person?.searched_at || new Date().toISOString()
+    }))
+    .filter((person) => {
+      if (!Number.isSafeInteger(person.id) || person.id <= 0 || !person.name || seenPersonIds.has(person.id)) return false
+      seenPersonIds.add(person.id)
+      return true
+    })
+    .slice(0, MAX_PREFERRED_PEOPLE)
+}
+
 const normalizeTasteProfileForApp = (profile = {}) => ({
   ...DEFAULT_TASTE_PROFILE,
   completed_onboarding: Boolean(profile.completed_onboarding),
@@ -446,6 +501,7 @@ const normalizeTasteProfileForApp = (profile = {}) => ({
     ? profile.runtime_preference
     : DEFAULT_TASTE_PROFILE.runtime_preference,
   ignored_title_keys: uniqueStringValues(profile.ignored_title_keys, MAX_IGNORED_TITLE_KEYS),
+  preferred_people: normalizePreferredPeople(profile.preferred_people),
   updated_at: profile.updated_at || null
 })
 
@@ -611,7 +667,8 @@ const buildRecommendations = ({
   selectedGenreIds = [],
   tasteProfile = DEFAULT_TASTE_PROFILE,
   runtimeMap = {},
-  recommendationLimit = INITIAL_RECOMMENDATION_POOL_LIMIT
+  recommendationLimit = INITIAL_RECOMMENDATION_POOL_LIMIT,
+  recommendationRotationSeed = ''
 }) => {
   const normalizedProfile = normalizeTasteProfileForApp(tasteProfile)
   const sourceMap = new Map()
@@ -692,30 +749,38 @@ const buildRecommendations = ({
       const favoritePenalty = favoriteKeys.has(key) ? -16 : 0
       const explicitMismatchPenalty = hasExplicitTaste && explicitTasteMatches === 0 ? -95 : 0
       const weakMatchPenalty = hasExplicitTaste && explicitTasteMatches === 1 ? -10 : 0
+      const recommendationScore =
+        sourceWeight +
+        matchingPreferredGenres * 78 +
+        matchingMoodGenres * 34 +
+        matchingSelectedGenres * 42 +
+        favoriteGenreScore +
+        watchedGenreScore +
+        mediaScore +
+        ratingScore +
+        popularityScore +
+        releaseScore +
+        runtimeScore +
+        favoritePenalty -
+        dislikedMatches * 100 +
+        explicitMismatchPenalty +
+        weakMatchPenalty
+      const recommendationRotationScore = getRecommendationRotationScore(recommendationRotationSeed, key)
 
       return {
         ...item,
-        recommendation_score:
-          sourceWeight +
-          matchingPreferredGenres * 78 +
-          matchingMoodGenres * 34 +
-          matchingSelectedGenres * 42 +
-          favoriteGenreScore +
-          watchedGenreScore +
-          mediaScore +
-          ratingScore +
-          popularityScore +
-          releaseScore +
-          runtimeScore +
-          favoritePenalty -
-          dislikedMatches * 100 +
-          explicitMismatchPenalty +
-          weakMatchPenalty,
+        recommendation_score: recommendationScore,
+        recommendation_rotation_score: recommendationRotationScore,
+        recommendation_rank_score: recommendationScore + recommendationRotationScore,
         recommendation_genres: itemGenreIds.map((genreId) => genreNameById.get(genreId)).filter(Boolean).slice(0, 3)
       }
     })
     .filter(Boolean)
-    .sort((firstItem, secondItem) => secondItem.recommendation_score - firstItem.recommendation_score)
+    .sort((firstItem, secondItem) => {
+      const rankDifference = secondItem.recommendation_rank_score - firstItem.recommendation_rank_score
+      if (Math.abs(rankDifference) > 0.0001) return rankDifference
+      return getMediaItemKey(firstItem).localeCompare(getMediaItemKey(secondItem))
+    })
     .slice(0, clampNumber(recommendationLimit, INITIAL_RECOMMENDATION_POOL_LIMIT, MAX_RECOMMENDATION_POOL_LIMIT))
 }
 
@@ -1002,7 +1067,14 @@ const AccountAccessRoute = ({ mode, onModeChange, onSubmit, isSubmitting, errorM
   </main>
 )
 
-const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle, onDismiss }) {
+const BeltCard = React.memo(function BeltCard({
+  movie,
+  index = 0,
+  onOpenTitle,
+  onDismiss,
+  onToggleWatchlist,
+  isInWatchlist = false
+}) {
   return (
     <article
       className="belt-card"
@@ -1031,6 +1103,20 @@ const BeltCard = React.memo(function BeltCard({ movie, index = 0, onOpenTitle, o
           ×
         </button>
       )}
+      {onToggleWatchlist && (
+        <button
+          type="button"
+          className={`belt-card-watchlist ${isInWatchlist ? 'is-active' : ''}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggleWatchlist(movie)
+          }}
+          aria-label={`${isInWatchlist ? 'Remove' : 'Add'} ${movie.title} ${isInWatchlist ? 'from' : 'to'} watchlist`}
+          aria-pressed={isInWatchlist}
+        >
+          {isInWatchlist ? '✓' : '+'}
+        </button>
+      )}
       <div className="belt-card-image-shell">
         <img
           className="belt-card-image"
@@ -1055,6 +1141,8 @@ const ContentBelt = React.memo(function ContentBelt({
   beltKey,
   onOpenTitle,
   onDismissTitle,
+  onToggleWatchlist,
+  watchlistMovieIds = [],
   beltVisibleCounts,
   setBeltVisibleCounts,
   loadingMoreBeltKeys,
@@ -1067,11 +1155,13 @@ const ContentBelt = React.memo(function ContentBelt({
   const visibleCount = beltVisibleCounts[resolvedBeltKey] || INITIAL_BELT_ITEM_COUNT
   const isLoadingMore = loadingMoreBeltKeys.includes(resolvedBeltKey)
   const isExhausted = exhaustedBeltKeys.includes(resolvedBeltKey)
+  const canKeepLoading = Boolean(onLoadMore) && (!isExhausted || resolvedBeltKey === 'recommendations')
+  const watchlistIdSet = useMemo(() => new Set(watchlistMovieIds), [watchlistMovieIds])
 
   if (items.length === 0) return null
 
   const beltItems = items.slice(0, visibleCount)
-  const hasMoreItems = visibleCount < items.length || (Boolean(onLoadMore) && !isExhausted)
+  const hasMoreItems = visibleCount < items.length || canKeepLoading
   const scrollBelt = (direction) => {
     beltRef.current?.scrollBy({
       left: direction === 'left' ? -Math.max(window.innerWidth * 0.72, 280) : Math.max(window.innerWidth * 0.72, 280),
@@ -1099,7 +1189,9 @@ const ContentBelt = React.memo(function ContentBelt({
       setLoadingMoreBeltKeys((currentKeys) => currentKeys.filter((key) => key !== resolvedBeltKey))
 
       if (!didLoadMore) {
-        setExhaustedBeltKeys((currentKeys) => [...new Set([...currentKeys, resolvedBeltKey])])
+        if (resolvedBeltKey !== 'recommendations') {
+          setExhaustedBeltKeys((currentKeys) => [...new Set([...currentKeys, resolvedBeltKey])])
+        }
         setBeltVisibleCounts((currentCounts) => ({
           ...currentCounts,
           [resolvedBeltKey]: items.length
@@ -1137,6 +1229,8 @@ const ContentBelt = React.memo(function ContentBelt({
               index={index}
               onOpenTitle={onOpenTitle}
               onDismiss={onDismissTitle}
+              onToggleWatchlist={onToggleWatchlist}
+              isInWatchlist={watchlistIdSet.has(getMediaItemKey(movie))}
             />
           ))}
           {hasMoreItems && (
@@ -1305,6 +1399,7 @@ const ProfilePanel = ({
   profile,
   genreList,
   favoriteCount = 0,
+  watchlistCount = 0,
   historyCount = 0,
   recommendationCount = 0,
   recommendationPoolTarget = INITIAL_RECOMMENDATION_POOL_LIMIT,
@@ -1438,6 +1533,12 @@ const ProfilePanel = ({
                 <div>
                   <span>Favorites</span>
                   <strong>{favoriteCount}</strong>
+                </div>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>Watchlist</span>
+                  <strong>{watchlistCount}</strong>
                 </div>
               </div>
               <div className="settings-row">
@@ -1866,6 +1967,7 @@ const BrowsePage = () => {
   const [topRatedMovies, setTopRatedMovies] = useState([])
   const [recommendationPoolMovies, setRecommendationPoolMovies] = useState([])
   const [recommendationPoolLimit, setRecommendationPoolLimit] = useState(INITIAL_RECOMMENDATION_POOL_LIMIT)
+  const [recommendationRotationWindow, setRecommendationRotationWindow] = useState(() => getRecommendationRotationWindow())
   const [genreRows, setGenreRows] = useState([])
   const [beltPages, setBeltPages] = useState({ popular: 1, topRated: 1, trending: 1, recommendations: 1 })
   const [beltVisibleCounts, setBeltVisibleCounts] = useState({})
@@ -1879,13 +1981,21 @@ const BrowsePage = () => {
   const [heroVolume, setHeroVolume] = useState(0.25)
   const [isHeroMuted, setIsHeroMuted] = useState(false)
   const [favoriteMovies, setFavoriteMovies] = useState([])
+  const [watchlistMovies, setWatchlistMovies] = useState([])
   const [recentlyWatchedMovies, setRecentlyWatchedMovies] = useState([])
   const [isLoading, setIsLoading] = useState(false)
+  const [searchTitleResults, setSearchTitleResults] = useState([])
+  const [personResults, setPersonResults] = useState([])
+  const [selectedPersonResult, setSelectedPersonResult] = useState(null)
+  const [isPersonSearchLoading, setIsPersonSearchLoading] = useState(false)
+  const [isPersonTitlesLoading, setIsPersonTitlesLoading] = useState(false)
   const [_isTrendingLoading, setIsTrendingLoading] = useState(false)
   const [_isTopRatedLoading, setIsTopRatedLoading] = useState(false)
   const [isGenreRowsLoading, setIsGenreRowsLoading] = useState(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [isWatchlistFocused, setIsWatchlistFocused] = useState(false)
   const [_isFavoritesLoading, setIsFavoritesLoading] = useState(false)
+  const [_isWatchlistLoading, setIsWatchlistLoading] = useState(false)
   const [_isRecentlyWatchedLoading, setIsRecentlyWatchedLoading] = useState(false)
   const [debouncedSearchTerm] = useDebounce(searchTerm, 500)
   const [mediaFilter, setMediaFilter] = useState('movie')
@@ -1920,6 +2030,7 @@ const BrowsePage = () => {
   const heroVideoRef = useRef(null)
   const tasteProfileRef = useRef(DEFAULT_TASTE_PROFILE)
   const tasteProfileSyncTimeoutRef = useRef(null)
+  const skipNextTitleFetchRef = useRef(false)
 
   const selectedGenreSet = useMemo(() => new Set(selectedGenreIds), [selectedGenreIds])
   const mediaPluralLabel = useMemo(() => getMediaPluralLabel(mediaFilter), [mediaFilter])
@@ -1953,6 +2064,10 @@ const BrowsePage = () => {
   const favoriteMovieIds = useMemo(
     () => favoriteMovies.map((movie) => getMediaItemKey(movie)),
     [favoriteMovies]
+  )
+  const watchlistMovieIds = useMemo(
+    () => watchlistMovies.map((movie) => getMediaItemKey(movie)),
+    [watchlistMovies]
   )
 
   const isAuthenticated = Boolean(authUser)
@@ -2002,10 +2117,30 @@ const BrowsePage = () => {
   const enrichMoviesWithRuntime = (movies) => upsertRuntime(movies, movieRuntimeMap)
   const activeTasteProfile = useMemo(() => normalizeTasteProfileForApp(tasteProfile), [tasteProfile])
   const tasteGenreOptions = useMemo(() => getTasteGenreOptions(genreList), [genreList])
+  const recommendationRotationSeed = useMemo(() => [
+    authUser?.id || 'guest',
+    mediaFilter,
+    selectedGenreIds.join(',') || 'all',
+    recommendationRotationWindow
+  ].join(':'), [authUser?.id, mediaFilter, recommendationRotationWindow, selectedGenreIds])
+  const preferredPeopleSignature = useMemo(
+    () => activeTasteProfile.preferred_people.map((person) => `${person.id}:${person.searched_at}`).join('|'),
+    [activeTasteProfile.preferred_people]
+  )
 
   useEffect(() => {
     tasteProfileRef.current = activeTasteProfile
   }, [activeTasteProfile])
+
+  useEffect(() => {
+    const rotationInterval = window.setInterval(() => {
+      setRecommendationRotationWindow(getRecommendationRotationWindow())
+    }, RECOMMENDATION_ROTATION_REFRESH_MS)
+
+    return () => {
+      window.clearInterval(rotationInterval)
+    }
+  }, [])
 
   useEffect(() => () => {
     if (tasteProfileSyncTimeoutRef.current) {
@@ -2025,7 +2160,8 @@ const BrowsePage = () => {
     selectedGenreIds,
     tasteProfile: activeTasteProfile,
     runtimeMap: movieRuntimeMap,
-    recommendationLimit: recommendationPoolLimit
+    recommendationLimit: recommendationPoolLimit,
+    recommendationRotationSeed
   }), [
     activeTasteProfile,
     favoriteMovies,
@@ -2035,6 +2171,7 @@ const BrowsePage = () => {
     movieRuntimeMap,
     recommendationPoolMovies,
     recommendationPoolLimit,
+    recommendationRotationSeed,
     recentlyWatchedMovies,
     selectedGenreIds,
     topRatedMovies,
@@ -2044,7 +2181,7 @@ const BrowsePage = () => {
     if (debouncedSearchTerm.trim().length < SEARCH_MIN_LENGTH) return []
 
     const rankedResults = buildRecommendations({
-      movieList,
+      movieList: searchTitleResults,
       trendingMovies: [],
       topRatedMovies: [],
       favoriteMovies,
@@ -2056,7 +2193,7 @@ const BrowsePage = () => {
       runtimeMap: movieRuntimeMap
     })
     const rankedKeys = new Set(rankedResults.map((movie) => getMediaItemKey(movie)))
-    const remainingResults = movieList.filter((movie) => !rankedKeys.has(getMediaItemKey(movie)))
+    const remainingResults = searchTitleResults.filter((movie) => !rankedKeys.has(getMediaItemKey(movie)))
 
     return [...rankedResults, ...remainingResults]
   }, [
@@ -2064,12 +2201,12 @@ const BrowsePage = () => {
     debouncedSearchTerm,
     favoriteMovies,
     genreList,
-    movieList,
     movieRuntimeMap,
+    searchTitleResults,
     selectedGenreIds
   ])
   const recommendationAccent = isAuthenticated
-    ? activeTasteProfile.completed_onboarding ? 'Personal picks' : 'Tune your taste'
+    ? activeTasteProfile.completed_onboarding ? '5-day mix' : 'Tune your taste'
     : 'Log in for personal picks'
   const heroQueueItems = useMemo(() => {
     const queueByMode = {
@@ -2116,6 +2253,7 @@ const BrowsePage = () => {
   const fetchMovies = async (query = '', genreIds = [], page = 1, selectedMediaFilter = 'movie') => {
     setIsLoading(true)
     setErrorMessage('')
+    setSelectedPersonResult(null)
 
     try {
       const normalizedQuery = query.trim()
@@ -2174,6 +2312,200 @@ const BrowsePage = () => {
       setMovieList([])
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const fetchSearchTitles = async (query = '', selectedMediaFilter = 'movie') => {
+    const normalizedQuery = query.trim()
+
+    if (normalizedQuery.length < SEARCH_MIN_LENGTH) {
+      setSearchTitleResults([])
+      return
+    }
+
+    try {
+      const detailEndpoint = selectedMediaFilter === 'tv' ? 'tv' : 'movie'
+      const params = new URLSearchParams({
+        query: normalizedQuery,
+        page: '1',
+        include_adult: 'false',
+        language: 'en-US'
+      })
+      const requestUrl = `${selectedMediaFilter}:${normalizedQuery}:${params.toString()}`
+      const cacheKey = getCacheKey('title-search', requestUrl)
+      const data = await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/search/${detailEndpoint}?${params.toString()}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        },
+        PERSISTENT_CACHE_TTL_MS
+      )
+
+      setSearchTitleResults(enrichMoviesWithRuntime(normalizeMediaList(data.results || [], selectedMediaFilter)))
+    } catch (error) {
+      console.log(`Error fetching search titles: ${error}`)
+      setSearchTitleResults([])
+    }
+  }
+
+  const fetchPeople = async (query = '') => {
+    const normalizedQuery = query.trim()
+
+    if (normalizedQuery.length < SEARCH_MIN_LENGTH) {
+      setPersonResults([])
+      setSelectedPersonResult(null)
+      setIsPersonSearchLoading(false)
+      return
+    }
+
+    setIsPersonSearchLoading(true)
+
+    try {
+      const params = new URLSearchParams({
+        query: normalizedQuery,
+        include_adult: 'false',
+        language: 'en-US',
+        page: '1'
+      })
+      const cacheKey = getCacheKey('people', params.toString())
+      const data = await fetchJson(
+        cacheKey,
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/search/person?${params.toString()}`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        },
+        PERSISTENT_CACHE_TTL_MS
+      )
+      const people = (data.results || [])
+        .filter((person) => person?.id && person.name)
+        .sort((firstPerson, secondPerson) => Number(secondPerson.popularity || 0) - Number(firstPerson.popularity || 0))
+        .slice(0, 6)
+
+      setPersonResults(people)
+    } catch (error) {
+      console.log(`Error fetching people: ${error}`)
+      setPersonResults([])
+    } finally {
+      setIsPersonSearchLoading(false)
+    }
+  }
+
+  const learnFromPersonSearch = (person, credits = []) => {
+    if (!person?.id) return
+
+    const currentProfile = tasteProfileRef.current
+    const learnedPerson = normalizePreferredPeople([{
+      id: person.id,
+      name: person.name,
+      profile_path: person.profile_path,
+      known_for_department: person.known_for_department,
+      searched_at: new Date().toISOString()
+    }])[0]
+
+    if (!learnedPerson) return
+
+    const nextProfile = normalizeTasteProfileForApp({
+      ...currentProfile,
+      completed_onboarding: currentProfile.completed_onboarding,
+      preferred_people: [
+        learnedPerson,
+        ...currentProfile.preferred_people.filter((entry) => entry.id !== learnedPerson.id)
+      ]
+    })
+
+    saveTasteProfile(nextProfile, { syncAccount: false })
+    queueTasteProfileSync(nextProfile)
+
+    if (credits.length > 0) {
+      setRecommendationPoolMovies((currentMovies) =>
+        appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(credits.slice(0, 36)))
+      )
+      setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+    }
+  }
+
+  const loadPersonTitles = async (person) => {
+    if (!person?.id) return
+
+    setSelectedPersonResult(person)
+    setIsWatchlistFocused(false)
+    setIsPersonTitlesLoading(true)
+    setErrorMessage('')
+
+    try {
+      const data = await fetchJson(
+        getCacheKey('person-credits', `${person.id}:combined`),
+        async () => {
+          const response = await fetch(`${API_BASE_URL}/person/${person.id}/combined_credits?language=en-US`, API_OPTIONS)
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+          return response.json()
+        },
+        PERSISTENT_CACHE_TTL_MS
+      )
+      const normalizedCredits = normalizeMediaList([...(data.cast || []), ...(data.crew || [])], mediaFilter)
+        .filter((item) => (mediaFilter === 'tv' ? item.media_type === 'tv' : item.media_type === 'movie'))
+        .filter((item) => item.poster_path || item.backdrop_path)
+        .sort((firstItem, secondItem) => {
+          const firstDate = Date.parse(firstItem.release_date || '') || 0
+          const secondDate = Date.parse(secondItem.release_date || '') || 0
+          if (secondDate !== firstDate) return secondDate - firstDate
+          return Number(secondItem.popularity || 0) - Number(firstItem.popularity || 0)
+        })
+
+      learnFromPersonSearch(person, normalizedCredits)
+      setMovieList(enrichMoviesWithRuntime(appendUniqueMediaItems([], normalizedCredits)))
+      skipNextTitleFetchRef.current = true
+      setCurrentPage(1)
+      setTotalPages(1)
+      setIsHeroCollapsed(true)
+      setIsSearchOpen(false)
+    } catch (error) {
+      console.log(`Error loading person titles: ${error}`)
+      setErrorMessage(`Could not load titles for ${person.name}. Please try again later.`)
+    } finally {
+      setIsPersonTitlesLoading(false)
+    }
+  }
+
+  const loadPreferredPeopleRecommendations = async (people = []) => {
+    const preferredPeople = normalizePreferredPeople(people).slice(0, 3)
+    if (preferredPeople.length === 0) return
+
+    try {
+      const settledCredits = await Promise.allSettled(
+        preferredPeople.map(async (person) => {
+          const data = await fetchJson(
+            getCacheKey('person-credits', `${person.id}:combined`),
+            async () => {
+              const response = await fetch(`${API_BASE_URL}/person/${person.id}/combined_credits?language=en-US`, API_OPTIONS)
+              if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+              return response.json()
+            },
+            PERSISTENT_CACHE_TTL_MS
+          )
+
+          return normalizeMediaList([...(data.cast || []), ...(data.crew || [])], mediaFilter)
+            .filter((item) => (mediaFilter === 'tv' ? item.media_type === 'tv' : item.media_type === 'movie'))
+            .filter((item) => item.poster_path || item.backdrop_path)
+            .sort((firstItem, secondItem) => Number(secondItem.popularity || 0) - Number(firstItem.popularity || 0))
+            .slice(0, 18)
+        })
+      )
+      const learnedTitles = settledCredits
+        .filter((result) => result.status === 'fulfilled')
+        .flatMap((result) => result.value)
+
+      if (learnedTitles.length === 0) return
+
+      setRecommendationPoolMovies((currentMovies) =>
+        appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(learnedTitles))
+      )
+      setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+    } catch (error) {
+      console.log(`Error loading preferred people recommendations: ${error}`)
     }
   }
 
@@ -2374,39 +2706,65 @@ const BrowsePage = () => {
     let reachedEnd = false
 
     try {
-      for (let pageOffset = 0; pageOffset < 3; pageOffset += 1) {
-        const page = startPage + pageOffset
-        const { items, totalPages: nextTotalPages } = await fetchTitlePage({
-          page,
-          genreIds: recommendationGenreIds,
-          selectedMediaFilter: mediaFilter,
-          sortBy: 'popularity.desc',
-          genreSeparator: '|',
-          extraParams: { 'vote_count.gte': '40' }
-        })
+      const scanRecommendationPages = async ({
+        genreIds = recommendationGenreIds,
+        pageStart = startPage,
+        voteCountMinimum = '20'
+      } = {}) => {
+        let lastPage = pageStart - 1
+        let didReachEnd = false
 
-        lastCheckedPage = page
+        for (let pageOffset = 0; pageOffset < RECOMMENDATION_PAGE_SCAN_LIMIT; pageOffset += 1) {
+          const page = pageStart + pageOffset
+          const { items, totalPages: nextTotalPages } = await fetchTitlePage({
+            page,
+            genreIds,
+            selectedMediaFilter: mediaFilter,
+            sortBy: 'popularity.desc',
+            genreSeparator: '|',
+            extraParams: { 'vote_count.gte': voteCountMinimum }
+          })
 
-        if (page >= nextTotalPages) {
-          reachedEnd = true
+          lastPage = page
+
+          if (page >= nextTotalPages) {
+            didReachEnd = true
+          }
+
+          items.forEach((item) => {
+            const itemKey = getMediaItemKey(item)
+            if (ignoredKeys.has(itemKey) || knownKeys.has(itemKey)) return
+
+            knownKeys.add(itemKey)
+            loadedItems.push(item)
+          })
+
+          if (loadedItems.length >= RECOMMENDATION_FRESH_BATCH_TARGET || didReachEnd) break
         }
 
-        items.forEach((item) => {
-          const itemKey = getMediaItemKey(item)
-          if (ignoredKeys.has(itemKey) || knownKeys.has(itemKey)) return
+        return { lastPage, didReachEnd }
+      }
 
-          knownKeys.add(itemKey)
-          loadedItems.push(item)
+      const tasteScan = await scanRecommendationPages()
+      lastCheckedPage = tasteScan.lastPage
+      reachedEnd = tasteScan.didReachEnd
+
+      if (loadedItems.length < RECOMMENDATION_FRESH_BATCH_TARGET && recommendationGenreIds.length > 0) {
+        const fallbackScan = await scanRecommendationPages({
+          genreIds: [],
+          pageStart: startPage,
+          voteCountMinimum: '80'
         })
 
-        if (loadedItems.length > 0 || reachedEnd) break
+        lastCheckedPage = Math.max(lastCheckedPage, fallbackScan.lastPage)
+        reachedEnd = reachedEnd && fallbackScan.didReachEnd
       }
 
       if (lastCheckedPage >= startPage) {
         setBeltPages((currentPages) => ({ ...currentPages, recommendations: lastCheckedPage }))
       }
 
-      if (loadedItems.length === 0) return false
+      if (loadedItems.length === 0) return !reachedEnd
 
       setRecommendationPoolMovies((currentMovies) =>
         appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(loadedItems))
@@ -2425,7 +2783,7 @@ const BrowsePage = () => {
     try {
       const { items } = await fetchTitlePage({
         page: nextPage,
-        query: debouncedSearchTerm,
+        query: '',
         genreIds: selectedGenreIds,
         selectedMediaFilter: mediaFilter
       })
@@ -2559,6 +2917,27 @@ const BrowsePage = () => {
       setFavoriteMovies([])
     } finally {
       setIsFavoritesLoading(false)
+    }
+  }
+
+  const loadWatchlistMovies = async () => {
+    if (!isAuthenticated) {
+      setWatchlistMovies([])
+      setIsWatchlistLoading(false)
+      return
+    }
+
+    setIsWatchlistLoading(true)
+
+    try {
+      const data = await authApi.getWatchlist(authUser.id)
+      const watchlist = (data?.items || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
+      setWatchlistMovies(enrichMoviesWithRuntime(watchlist))
+    } catch (error) {
+      console.log(`Error loading watchlist: ${error}`)
+      setWatchlistMovies([])
+    } finally {
+      setIsWatchlistLoading(false)
     }
   }
 
@@ -2771,6 +3150,43 @@ const BrowsePage = () => {
     }
   }
 
+  const toggleWatchlistMovie = async (movie) => {
+    if (!isAuthenticated) {
+      setAuthErrorMessage('')
+      navigate('/account/login')
+      return
+    }
+
+    const movieKey = getMediaItemKey(movie)
+    const isSaved = watchlistMovieIds.includes(movieKey)
+    const movieData = {
+      ...movie,
+      runtime: movie.runtime ?? movieRuntimeMap[getRuntimeKey(movie)] ?? null
+    }
+
+    setWatchlistMovies((currentMovies) => {
+      if (isSaved) {
+        return currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
+      }
+
+      const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
+      return [movieData, ...withoutMovie]
+    })
+
+    try {
+      await authApi.toggleWatchlist(authUser.id, movieData)
+    } catch (error) {
+      console.log(`Error toggling watchlist title: ${error}`)
+      setWatchlistMovies((currentMovies) => {
+        if (isSaved) {
+          return [movieData, ...currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)]
+        }
+
+        return currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
+      })
+    }
+  }
+
   const openTitleDetails = useCallback((movie) => {
     if (isAuthenticated) {
       authApi.trackRecentlyWatched(authUser.id, movie).catch((error) => {
@@ -2898,9 +3314,20 @@ const BrowsePage = () => {
     setSelectedGenreIds([])
   }
 
+  const clearPersonFilter = () => {
+    setSelectedPersonResult(null)
+    setPersonResults([])
+    setSearchTerm('')
+    setCurrentPage(1)
+    setIsHeroCollapsed(false)
+  }
+
   const resetToHome = () => {
     setSearchTerm('')
     setSelectedGenreIds([])
+    setSelectedPersonResult(null)
+    setPersonResults([])
+    setIsWatchlistFocused(false)
     setMediaFilter('movie')
     setIsGenrePanelOpen(false)
     setIsHeroCollapsed(false)
@@ -3040,6 +3467,7 @@ const BrowsePage = () => {
 
   useEffect(() => {
     loadFavoriteMovies()
+    loadWatchlistMovies()
     loadRecentlyWatched()
     loadTasteProfile()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3193,7 +3621,13 @@ const BrowsePage = () => {
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [debouncedSearchTerm, selectedGenreIds, mediaFilter])
+  }, [selectedGenreIds, mediaFilter])
+
+  useEffect(() => {
+    fetchPeople(debouncedSearchTerm)
+    fetchSearchTitles(debouncedSearchTerm, mediaFilter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearchTerm, mediaFilter])
 
   useEffect(() => {
     const syncDesktopGenreState = () => {
@@ -3211,9 +3645,14 @@ const BrowsePage = () => {
   }, [])
 
   useEffect(() => {
-    fetchMovies(debouncedSearchTerm, selectedGenreIds, currentPage, mediaFilter)
+    if (skipNextTitleFetchRef.current) {
+      skipNextTitleFetchRef.current = false
+      return
+    }
+
+    fetchMovies('', selectedGenreIds, currentPage, mediaFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearchTerm, selectedGenreIds, currentPage, mediaFilter])
+  }, [selectedGenreIds, currentPage, mediaFilter])
 
   useEffect(() => {
     if (movieList.length > 0) fetchMovieRuntimes(movieList)
@@ -3236,9 +3675,21 @@ const BrowsePage = () => {
   }, [recommendationPoolMovies])
 
   useEffect(() => {
+    if (!preferredPeopleSignature) return
+
+    loadPreferredPeopleRecommendations(activeTasteProfile.preferred_people)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredPeopleSignature, mediaFilter])
+
+  useEffect(() => {
     if (favoriteMovies.length > 0) fetchMovieRuntimes(favoriteMovies)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [favoriteMovies])
+
+  useEffect(() => {
+    if (watchlistMovies.length > 0) fetchMovieRuntimes(watchlistMovies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchlistMovies])
 
   useEffect(() => {
     if (recentlyWatchedMovies.length > 0) fetchMovieRuntimes(recentlyWatchedMovies)
@@ -3275,10 +3726,12 @@ const BrowsePage = () => {
     } finally {
       setAuthUser(null)
       setFavoriteMovies([])
+      setWatchlistMovies([])
       setRecentlyWatchedMovies([])
       setTasteProfile(DEFAULT_TASTE_PROFILE)
       setIsTasteQuizOpen(false)
       setIsProfilePanelOpen(false)
+      setIsWatchlistFocused(false)
       setProfileStatusMessage('')
       setHasDismissedTasteQuizThisSession(false)
     }
@@ -3304,10 +3757,12 @@ const BrowsePage = () => {
         await authApi.logout()
         setAuthUser(null)
         setFavoriteMovies([])
+        setWatchlistMovies([])
         setRecentlyWatchedMovies([])
         setTasteProfile(DEFAULT_TASTE_PROFILE)
         setIsTasteQuizOpen(false)
         setIsProfilePanelOpen(false)
+        setIsWatchlistFocused(false)
         setDeletionNotice('Your account, favorites, and recently watched history have been permanently deleted. You have been signed out.')
       })
       .catch((error) => {
@@ -3568,7 +4023,11 @@ const BrowsePage = () => {
           <button
             type="button"
             className={`stream-nav-item ${mediaFilter === 'movie' ? 'is-active-soft' : ''}`}
-            onClick={() => setMediaFilter('movie')}
+            onClick={() => {
+              setIsWatchlistFocused(false)
+              setSelectedPersonResult(null)
+              setMediaFilter('movie')
+            }}
           >
             <VideoCameraIcon className="stream-nav-svg" />
             <span className="stream-nav-label">Movies</span>
@@ -3577,10 +4036,35 @@ const BrowsePage = () => {
           <button
             type="button"
             className={`stream-nav-item ${mediaFilter === 'tv' ? 'is-active-soft' : ''}`}
-            onClick={() => setMediaFilter('tv')}
+            onClick={() => {
+              setIsWatchlistFocused(false)
+              setSelectedPersonResult(null)
+              setMediaFilter('tv')
+            }}
           >
             <TvIcon className="stream-nav-svg" />
             <span className="stream-nav-label">TV</span>
+          </button>
+
+          <button
+            type="button"
+            className={`stream-nav-icon ${isWatchlistFocused ? 'is-active-soft' : ''}`}
+            onClick={() => {
+              if (!isAuthenticated) {
+                setAuthErrorMessage('')
+                navigate('/account/login')
+                return
+              }
+
+              setSelectedPersonResult(null)
+              setIsWatchlistFocused(true)
+              setIsHeroCollapsed(true)
+            }}
+            aria-label="Open watchlist"
+            aria-pressed={isWatchlistFocused}
+          >
+            <BookmarkIcon className="stream-nav-svg" />
+            <span className="stream-nav-label">Watchlist</span>
           </button>
 
           <button
@@ -3623,8 +4107,8 @@ const BrowsePage = () => {
                   type="text"
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Search movies or TV shows"
-                  aria-label="Search movies or TV shows"
+                  placeholder="Search movies, TV shows, actors, or directors"
+                  aria-label="Search movies, TV shows, actors, or directors"
                   autoFocus
                 />
                 <button type="button" onClick={() => setIsSearchOpen(false)}>
@@ -3637,7 +4121,15 @@ const BrowsePage = () => {
                 <button type="button" className={mediaFilter === 'movie' ? 'is-active' : ''} onClick={() => setMediaFilter('movie')}>Movies</button>
                 <button type="button" className={mediaFilter === 'tv' ? 'is-active' : ''} onClick={() => setMediaFilter('tv')}>TV</button>
                 <button type="button" onClick={() => setSearchTerm('')}>Popular</button>
-                <button type="button" onClick={() => setMovieList(topRatedMovies)}>Rating</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSearchOpen(false)
+                    setIsHeroCollapsed(true)
+                  }}
+                >
+                  Rating
+                </button>
                 <button type="button" onClick={() => setCurrentPage(1)}>Newest</button>
               </div>
 
@@ -3659,32 +4151,67 @@ const BrowsePage = () => {
 
               {errorMessage && searchTerm.trim().length > 0 ? (
                 <p className="stream-search-message">{errorMessage}</p>
-              ) : isLoading && searchTerm.trim().length >= SEARCH_MIN_LENGTH ? (
+              ) : (isLoading || isPersonSearchLoading || isPersonTitlesLoading) && searchTerm.trim().length >= SEARCH_MIN_LENGTH ? (
                 <p className="stream-search-message">Searching...</p>
-              ) : searchResults.length > 0 ? (
-                <div className="stream-search-results">
-                  {searchResults.slice(0, 8).map((movie) => (
-                    <button
-                      key={`search-${movie.media_type}-${movie.id}`}
-                      type="button"
-                      className="stream-search-result"
-                      onClick={() => {
-                        setIsSearchOpen(false)
-                        openTitleDetails(movie)
-                      }}
-                    >
-                      <img
-                        src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                      />
-                      <span>{movie.title}</span>
-                    </button>
-                  ))}
-                </div>
+              ) : searchResults.length > 0 || personResults.length > 0 ? (
+                <>
+                  {personResults.length > 0 && (
+                    <div className="stream-person-results" aria-label="People results">
+                      {personResults.map((person) => {
+                        const knownFor = normalizeMediaList(person.known_for || [], mediaFilter)
+                          .slice(0, 2)
+                          .map((item) => item.title)
+                          .join(', ')
+
+                        return (
+                          <button
+                            key={`person-${person.id}`}
+                            type="button"
+                            className="stream-person-result"
+                            onClick={() => loadPersonTitles(person)}
+                          >
+                            <img
+                              src={getProfileUrl(person)}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                            />
+                            <span>
+                              <strong>{person.name}</strong>
+                              <small>{person.known_for_department || 'Person'}{knownFor ? ` - ${knownFor}` : ''}</small>
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {searchResults.length > 0 && (
+                    <div className="stream-search-results">
+                      {searchResults.slice(0, 8).map((movie) => (
+                        <button
+                          key={`search-${movie.media_type}-${movie.id}`}
+                          type="button"
+                          className="stream-search-result"
+                          onClick={() => {
+                            setIsSearchOpen(false)
+                            openTitleDetails(movie)
+                          }}
+                        >
+                          <img
+                            src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                          />
+                          <span>{movie.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
-                <p className="stream-search-message">Type at least 3 characters to find something specific.</p>
+                <p className="stream-search-message">Type at least 3 characters to find titles or people.</p>
               )}
             </div>
           </div>
@@ -3805,50 +4332,60 @@ const BrowsePage = () => {
         </button>
 
         <section className="stream-belts" aria-label="Browse rows" ref={browseRowsRef}>
-          <ContentBelt
-            title="Recommended For You"
-            items={recommendationItems}
-            accent={recommendationAccent}
-            headingAction={(
-              <button
-                type="button"
-                className="content-belt-heading-action"
-                onClick={() => {
-                  if (!isAuthenticated) {
-                    setAuthErrorMessage('')
-                    navigate('/account/login')
-                    return
-                  }
-
-                  setIsTasteQuizOpen(true)
-                }}
-              >
-                {isAuthenticated ? 'Tune Taste' : 'Log in'}
-              </button>
-            )}
-            beltKey="recommendations"
-            onOpenTitle={openTitleDetails}
-            onDismissTitle={isAuthenticated ? hideRecommendationTitle : undefined}
-            onLoadMore={loadMoreRecommendedTitles}
-            beltVisibleCounts={beltVisibleCounts}
-            setBeltVisibleCounts={setBeltVisibleCounts}
-            loadingMoreBeltKeys={loadingMoreBeltKeys}
-            setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
-            exhaustedBeltKeys={exhaustedBeltKeys}
-            setExhaustedBeltKeys={setExhaustedBeltKeys}
-          />
-
-          <ContinueWatchingSection />
-
-          {heroRows.map((row) => (
+          {isWatchlistFocused ? (
+            watchlistMovies.length > 0 ? (
+              <ContentBelt
+                title="Your Watchlist"
+                items={watchlistMovies}
+                accent={`${watchlistMovies.length} saved`}
+                headingAction={(
+                  <button
+                    type="button"
+                    className="content-belt-heading-action"
+                    onClick={resetToHome}
+                  >
+                    Clear view
+                  </button>
+                )}
+                beltKey="watchlist"
+                onOpenTitle={openTitleDetails}
+                onToggleWatchlist={toggleWatchlistMovie}
+                watchlistMovieIds={watchlistMovieIds}
+                beltVisibleCounts={beltVisibleCounts}
+                setBeltVisibleCounts={setBeltVisibleCounts}
+                loadingMoreBeltKeys={loadingMoreBeltKeys}
+                setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+                exhaustedBeltKeys={exhaustedBeltKeys}
+                setExhaustedBeltKeys={setExhaustedBeltKeys}
+              />
+            ) : (
+              <section className="watchlist-empty-state" aria-labelledby="watchlist-empty-title">
+                <BookmarkIcon />
+                <h2 id="watchlist-empty-title">Your Watchlist</h2>
+                <p>Tap the small plus button on any title card to save it here.</p>
+                <button type="button" onClick={resetToHome}>
+                  Browse titles
+                </button>
+              </section>
+            )
+          ) : selectedPersonResult ? (
             <ContentBelt
-              key={row.id}
-              title={row.title}
-              items={row.items}
-              accent={row.accent}
-              onLoadMore={row.onLoadMore}
-              beltKey={row.id}
+              title={`${selectedPersonResult.name} ${mediaPluralLabel}`}
+              items={movieList}
+              accent={selectedPersonResult.known_for_department || 'Person search'}
+              headingAction={(
+                <button
+                  type="button"
+                  className="content-belt-heading-action"
+                  onClick={clearPersonFilter}
+                >
+                  Clear filter
+                </button>
+              )}
+              beltKey={`person-${selectedPersonResult.id}`}
               onOpenTitle={openTitleDetails}
+              onToggleWatchlist={toggleWatchlistMovie}
+              watchlistMovieIds={watchlistMovieIds}
               beltVisibleCounts={beltVisibleCounts}
               setBeltVisibleCounts={setBeltVisibleCounts}
               loadingMoreBeltKeys={loadingMoreBeltKeys}
@@ -3856,31 +4393,92 @@ const BrowsePage = () => {
               exhaustedBeltKeys={exhaustedBeltKeys}
               setExhaustedBeltKeys={setExhaustedBeltKeys}
             />
-          ))}
+          ) : (
+            <>
+              <ContentBelt
+                title="Recommended For You"
+                items={recommendationItems}
+                accent={recommendationAccent}
+                headingAction={(
+                  <button
+                    type="button"
+                    className="content-belt-heading-action"
+                    onClick={() => {
+                      if (!isAuthenticated) {
+                        setAuthErrorMessage('')
+                        navigate('/account/login')
+                        return
+                      }
 
-          {isGenreRowsLoading && (
-            <div className="stream-belt-loading">
-              <Spinner label="Loading genres" />
-            </div>
+                      setIsTasteQuizOpen(true)
+                    }}
+                  >
+                    {isAuthenticated ? 'Tune Taste' : 'Log in'}
+                  </button>
+                )}
+                beltKey="recommendations"
+                onOpenTitle={openTitleDetails}
+                onDismissTitle={isAuthenticated ? hideRecommendationTitle : undefined}
+                onToggleWatchlist={toggleWatchlistMovie}
+                watchlistMovieIds={watchlistMovieIds}
+                onLoadMore={loadMoreRecommendedTitles}
+                beltVisibleCounts={beltVisibleCounts}
+                setBeltVisibleCounts={setBeltVisibleCounts}
+                loadingMoreBeltKeys={loadingMoreBeltKeys}
+                setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+                exhaustedBeltKeys={exhaustedBeltKeys}
+                setExhaustedBeltKeys={setExhaustedBeltKeys}
+              />
+
+              <ContinueWatchingSection />
+
+              {heroRows.map((row) => (
+                <ContentBelt
+                  key={row.id}
+                  title={row.title}
+                  items={row.items}
+                  accent={row.accent}
+                  onLoadMore={row.onLoadMore}
+                  beltKey={row.id}
+                  onOpenTitle={openTitleDetails}
+                  onToggleWatchlist={toggleWatchlistMovie}
+                  watchlistMovieIds={watchlistMovieIds}
+                  beltVisibleCounts={beltVisibleCounts}
+                  setBeltVisibleCounts={setBeltVisibleCounts}
+                  loadingMoreBeltKeys={loadingMoreBeltKeys}
+                  setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+                  exhaustedBeltKeys={exhaustedBeltKeys}
+                  setExhaustedBeltKeys={setExhaustedBeltKeys}
+                />
+              ))}
+
+              {isGenreRowsLoading && (
+                <div className="stream-belt-loading">
+                  <Spinner label="Loading genres" />
+                </div>
+              )}
+
+              {genreRows.map((row) => (
+                <ContentBelt
+                  key={`genre-row-${row.id}`}
+                  title={`${row.title} ${mediaPluralLabel}`}
+                  items={row.items}
+                  accent="Genre"
+                  onLoadMore={() => loadMoreGenreRow(row.id)}
+                  beltKey={`genre-${row.id}`}
+                  onOpenTitle={openTitleDetails}
+                  onToggleWatchlist={toggleWatchlistMovie}
+                  watchlistMovieIds={watchlistMovieIds}
+                  beltVisibleCounts={beltVisibleCounts}
+                  setBeltVisibleCounts={setBeltVisibleCounts}
+                  loadingMoreBeltKeys={loadingMoreBeltKeys}
+                  setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
+                  exhaustedBeltKeys={exhaustedBeltKeys}
+                  setExhaustedBeltKeys={setExhaustedBeltKeys}
+                />
+              ))}
+            </>
           )}
-
-          {genreRows.map((row) => (
-            <ContentBelt
-              key={`genre-row-${row.id}`}
-              title={`${row.title} ${mediaPluralLabel}`}
-              items={row.items}
-              accent="Genre"
-              onLoadMore={() => loadMoreGenreRow(row.id)}
-              beltKey={`genre-${row.id}`}
-              onOpenTitle={openTitleDetails}
-              beltVisibleCounts={beltVisibleCounts}
-              setBeltVisibleCounts={setBeltVisibleCounts}
-              loadingMoreBeltKeys={loadingMoreBeltKeys}
-              setLoadingMoreBeltKeys={setLoadingMoreBeltKeys}
-              exhaustedBeltKeys={exhaustedBeltKeys}
-              setExhaustedBeltKeys={setExhaustedBeltKeys}
-            />
-          ))}
         </section>
 
         <footer className="stream-footer" aria-label="Site disclaimer and attribution">
@@ -3931,6 +4529,7 @@ const BrowsePage = () => {
         profile={activeTasteProfile}
         genreList={genreList}
         favoriteCount={favoriteMovies.length}
+        watchlistCount={watchlistMovies.length}
         historyCount={recentlyWatchedMovies.length}
         recommendationCount={recommendationItems.length}
         recommendationPoolTarget={recommendationPoolLimit}

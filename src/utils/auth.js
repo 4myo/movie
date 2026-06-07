@@ -3,11 +3,13 @@ import { LEGAL_DOCUMENT_VERSION } from './legal.js'
 
 const FAVORITES_TABLE = 'favorite_movies'
 const RECENTLY_WATCHED_TABLE = 'recently_watched'
+const WATCHLIST_TABLE = 'watchlist_movies'
 const TRUSTED_DEVICE_STORAGE_KEY = 'movieslo-trusted-device-v1'
 const TRUSTED_DEVICE_DURATION_MS = 30 * 24 * 60 * 60 * 1000
 const TASTE_PROFILE_METADATA_KEY = 'taste_profile'
 const TASTE_PROFILE_UPDATED_AT_KEY = 'taste_profile_updated_at'
 const MAX_IGNORED_TITLE_KEYS = 1000
+const MAX_PREFERRED_PEOPLE = 12
 const getStoredMediaType = (movie) => (movie?.media_type === 'tv' ? 'tv' : 'movie')
 const getStoredMovieId = (movie) => {
   const movieId = Number(movie?.id)
@@ -28,6 +30,25 @@ const sanitizeNumberArray = (values = [], limit = 16) =>
   Array.isArray(values)
     ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isSafeInteger(value) && value > 0))].slice(0, limit)
     : []
+const sanitizePreferredPeople = (people = []) => {
+  if (!Array.isArray(people)) return []
+
+  const seenPersonIds = new Set()
+  return people
+    .map((person) => ({
+      id: Number(person?.id),
+      name: String(person?.name || '').trim().slice(0, 80),
+      profile_path: person?.profile_path ? String(person.profile_path).slice(0, 120) : '',
+      known_for_department: String(person?.known_for_department || '').trim().slice(0, 40),
+      searched_at: person?.searched_at || new Date().toISOString()
+    }))
+    .filter((person) => {
+      if (!Number.isSafeInteger(person.id) || person.id <= 0 || !person.name || seenPersonIds.has(person.id)) return false
+      seenPersonIds.add(person.id)
+      return true
+    })
+    .slice(0, MAX_PREFERRED_PEOPLE)
+}
 const normalizeTasteProfile = (profile = {}) => {
   const preferredMediaTypes = ['movie', 'tv', 'both']
   const releasePreferences = ['new', 'classic', 'mixed']
@@ -42,6 +63,7 @@ const normalizeTasteProfile = (profile = {}) => {
     release_preference: releasePreferences.includes(profile.release_preference) ? profile.release_preference : 'mixed',
     runtime_preference: runtimePreferences.includes(profile.runtime_preference) ? profile.runtime_preference : 'any',
     ignored_title_keys: sanitizeStringArray(profile.ignored_title_keys, MAX_IGNORED_TITLE_KEYS),
+    preferred_people: sanitizePreferredPeople(profile.preferred_people),
     updated_at: profile.updated_at || new Date().toISOString()
   }
 }
@@ -298,6 +320,67 @@ export const authApi = {
     }
 
     return { favorites: (data || []).map((entry) => entry.movie_data) }
+  },
+
+  getWatchlist: async (userId) => {
+    const verifiedUser = await requireVerifiedUser(userId)
+    const { data, error } = await supabase
+      .from(WATCHLIST_TABLE)
+      .select('movie_data')
+      .eq('user_id', verifiedUser.id)
+      .order('updated_at', { ascending: false })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return { items: (data || []).map((entry) => entry.movie_data) }
+  },
+
+  toggleWatchlist: async (userId, movie) => {
+    const verifiedUser = await requireVerifiedUser(userId)
+    const mediaType = getStoredMediaType(movie)
+    const movieId = getStoredMovieId(movie)
+
+    const { data: existing, error: existingError } = await supabase
+      .from(WATCHLIST_TABLE)
+      .select('id')
+      .eq('user_id', verifiedUser.id)
+      .eq('movie_id', movieId)
+      .eq('media_type', mediaType)
+      .maybeSingle()
+
+    if (existingError) {
+      throw new Error(existingError.message)
+    }
+
+    if (existing) {
+      const { error } = await supabase
+        .from(WATCHLIST_TABLE)
+        .delete()
+        .eq('id', existing.id)
+
+      if (error) {
+        throw new Error(error.message)
+      }
+
+      return { action: 'removed' }
+    }
+
+    const { error } = await supabase
+      .from(WATCHLIST_TABLE)
+      .insert({
+        user_id: verifiedUser.id,
+        movie_id: movieId,
+        media_type: mediaType,
+        movie_data: movie
+      })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return { action: 'added' }
   },
 
   toggleFavorite: async (userId, movie) => {

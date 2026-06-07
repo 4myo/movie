@@ -123,6 +123,12 @@ export const FilmIcon = (props) => (
   </SvgIcon>
 )
 
+export const BookmarkIcon = (props) => (
+  <SvgIcon {...props}>
+    <path d="M6 4h12a1 1 0 0 1 1 1v17l-7-4-7 4V5a1 1 0 0 1 1-1z" />
+  </SvgIcon>
+)
+
 export const MonitorPlayIcon = (props) => (
   <SvgIcon {...props}>
     <rect x="3" y="5" width="18" height="12" rx="2" />
