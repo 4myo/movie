@@ -39,14 +39,14 @@ const MovieModal = ({
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow
-    const previousHtmlOverflow = document.documentElement.style.overflow
+    const previousBodyScrollbarGutter = document.body.style.scrollbarGutter
 
     document.body.style.overflow = 'hidden'
-    document.documentElement.style.overflow = 'hidden'
+    document.body.style.scrollbarGutter = 'stable'
 
     return () => {
       document.body.style.overflow = previousBodyOverflow
-      document.documentElement.style.overflow = previousHtmlOverflow
+      document.body.style.scrollbarGutter = previousBodyScrollbarGutter
     }
   }, [])
 
@@ -65,7 +65,7 @@ const MovieModal = ({
   if (!movie) return null
 
   const releaseYear = movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A'
-  const heroImage = imageUrl(movie.backdrop_path || movie.poster_path, movie.backdrop_path ? 'original' : 'w780')
+  const heroImage = imageUrl(movie.backdrop_path || movie.poster_path, movie.backdrop_path ? 'w1280' : 'w780')
   const canPlay = Boolean(movie?.id)
   const isTvShow = movie.media_type === 'tv'
   const handlePlayTitle = () => {
@@ -86,7 +86,17 @@ const MovieModal = ({
           ×
         </button>
 
-        <div className="cinematic-title-hero" style={{ backgroundImage: `url(${heroImage})` }}>
+        <div className="cinematic-title-hero">
+          <img
+            className="cinematic-title-hero-image"
+            src={heroImage}
+            alt=""
+            width="1280"
+            height="720"
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
+          />
           <div className="cinematic-title-hero-fade" />
           <h2 className="cinematic-title-logo">{movie.title}</h2>
         </div>
@@ -197,8 +207,10 @@ const MovieModal = ({
                     onClick={() => onWatchTrailer?.(similarMovie)}
                   >
                     <img
-                      src={imageUrl(similarMovie.backdrop_path || similarMovie.poster_path, similarMovie.backdrop_path ? 'w780' : 'w500')}
+                      src={imageUrl(similarMovie.backdrop_path || similarMovie.poster_path, similarMovie.backdrop_path ? 'w500' : 'w342')}
                       alt=""
+                      width="500"
+                      height="281"
                       loading="lazy"
                       decoding="async"
                     />

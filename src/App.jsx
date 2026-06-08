@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useDebounce } from 'use-debounce'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Spinner from './components/Spinner.jsx'
@@ -171,6 +171,8 @@ const TV_BELT_GENRES = [
 const MAX_GENRE_ROWS = 32
 const INITIAL_BELT_ITEM_COUNT = 12
 const BELT_ITEM_BATCH_SIZE = 10
+const MAX_RUNTIME_FETCH_BATCH = 12
+const RUNTIME_FETCH_CONCURRENCY = 4
 const imageBaseUrl = 'https://image.tmdb.org/t/p/'
 const WATCH_HISTORY_STORAGE_PREFIX = 'movie-browser:watch-history:v1:'
 
@@ -454,6 +456,8 @@ const upsertRuntime = (items, runtimeMap) =>
 
 const getRuntimeKey = (item) => `${item.media_type || 'movie'}-${item.id}`
 const getMediaItemKey = (item) => `${item.media_type || 'movie'}-${item.id}`
+const getSmoothScrollBehavior = () =>
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
 
 const uniqueStringValues = (values = [], limit = 80) =>
   Array.isArray(values)
@@ -842,11 +846,20 @@ const getSectionMediaTypes = (mediaFilter) => {
 }
 
 const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onPlayTitle, onClose }) => {
-  const [movie, setMovie] = useState(null)
+  const routeLocation = useLocation()
+  const previewMovie = routeLocation.state?.previewMovie
+  const initialMovie = useMemo(() =>
+    previewMovie &&
+      String(previewMovie.id) === String(id) &&
+      (previewMovie.media_type || 'movie') === mediaType
+      ? normalizeMediaItem(previewMovie, mediaType)
+      : null,
+  [id, mediaType, previewMovie])
+  const [movie, setMovie] = useState(initialMovie)
   const [trailerUrl, setTrailerUrl] = useState('')
   const [streamingUrl, setStreamingUrl] = useState('')
   const [similarMovies, setSimilarMovies] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(!initialMovie)
   const [isSimilarLoading, setIsSimilarLoading] = useState(false)
   const [hasLoadError, setHasLoadError] = useState(false)
   const [seasonOptions, setSeasonOptions] = useState([])
@@ -855,12 +868,16 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
   const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState(null)
 
   useEffect(() => {
+    const hasPreviewMovie = initialMovie &&
+      String(initialMovie.id) === String(id) &&
+      (initialMovie.media_type || 'movie') === mediaType
+
     const loadDetails = async () => {
-      setIsLoading(true)
-      setMovie(null)
+      setIsLoading(!hasPreviewMovie)
+      setMovie((currentMovie) => hasPreviewMovie ? currentMovie || initialMovie : null)
       setTrailerUrl('')
       setSimilarMovies([])
-      setStreamingUrl('')
+      setStreamingUrl(hasPreviewMovie && initialMovie.media_type === 'movie' ? getStreamingUrl(initialMovie) : '')
       setHasLoadError(false)
       setSeasonOptions([])
       setSelectedSeasonNumber(null)
@@ -916,7 +933,7 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
     }
 
     loadDetails()
-  }, [id, mediaType])
+  }, [id, initialMovie, mediaType])
 
   useEffect(() => {
     const loadEpisodes = async () => {
@@ -967,6 +984,8 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
   }, [movie, selectedSeasonNumber, selectedEpisodeNumber])
 
   useEffect(() => {
+    let isCancelled = false
+
     const loadSimilar = async () => {
       if (!movie?.id) return
 
@@ -982,16 +1001,27 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
             return response.json()
           }
         )
-        setSimilarMovies(normalizeMediaList((data.results || []).slice(0, 8), movie.media_type))
+        if (!isCancelled) {
+          setSimilarMovies(normalizeMediaList((data.results || []).slice(0, 8), movie.media_type))
+        }
       } catch (error) {
         console.log(`Error fetching similar titles: ${error}`)
-        setSimilarMovies([])
+        if (!isCancelled) {
+          setSimilarMovies([])
+        }
       } finally {
-        setIsSimilarLoading(false)
+        if (!isCancelled) {
+          setIsSimilarLoading(false)
+        }
       }
     }
 
-    loadSimilar()
+    const loadTimer = window.setTimeout(loadSimilar, 180)
+
+    return () => {
+      isCancelled = true
+      window.clearTimeout(loadTimer)
+    }
   }, [movie])
 
   if (isLoading) {
@@ -1075,16 +1105,30 @@ const BeltCard = React.memo(function BeltCard({
   onToggleWatchlist,
   isInWatchlist = false
 }) {
+  const imagePriority = index === 0
+  const handleOpenTitle = useCallback(() => {
+    onOpenTitle(movie)
+  }, [movie, onOpenTitle])
+  const handleKeyDown = useCallback((event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onOpenTitle(movie)
+    }
+  }, [movie, onOpenTitle])
+  const handleDismiss = useCallback((event) => {
+    event.stopPropagation()
+    onDismiss?.(movie)
+  }, [movie, onDismiss])
+  const handleToggleWatchlist = useCallback((event) => {
+    event.stopPropagation()
+    onToggleWatchlist?.(movie)
+  }, [movie, onToggleWatchlist])
+
   return (
     <article
       className="belt-card"
-      onClick={() => onOpenTitle(movie)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onOpenTitle(movie)
-        }
-      }}
+      onClick={handleOpenTitle}
+      onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
       aria-label={`Open ${movie.title}`}
@@ -1094,10 +1138,7 @@ const BeltCard = React.memo(function BeltCard({
         <button
           type="button"
           className="belt-card-dismiss"
-          onClick={(event) => {
-            event.stopPropagation()
-            onDismiss(movie)
-          }}
+          onClick={handleDismiss}
           aria-label={`Hide ${movie.title} from recommendations`}
         >
           ×
@@ -1107,10 +1148,7 @@ const BeltCard = React.memo(function BeltCard({
         <button
           type="button"
           className={`belt-card-watchlist ${isInWatchlist ? 'is-active' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            onToggleWatchlist(movie)
-          }}
+          onClick={handleToggleWatchlist}
           aria-label={`${isInWatchlist ? 'Remove' : 'Add'} ${movie.title} ${isInWatchlist ? 'from' : 'to'} watchlist`}
           aria-pressed={isInWatchlist}
         >
@@ -1120,11 +1158,14 @@ const BeltCard = React.memo(function BeltCard({
       <div className="belt-card-image-shell">
         <img
           className="belt-card-image"
-          src={movie.backdrop_path ? getBackdropUrl(movie, 'w780') : getPosterUrl(movie)}
+          src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')}
           alt={movie.title}
-          loading={index < 4 ? 'eager' : 'lazy'}
+          width="500"
+          height="281"
+          loading={imagePriority ? 'eager' : 'lazy'}
           decoding="async"
-          fetchPriority={index < 4 ? 'high' : 'auto'}
+          fetchPriority={imagePriority ? 'high' : 'auto'}
+          sizes="(min-width: 640px) 24rem, 17rem"
         />
       </div>
       <h3 className="belt-card-title">{movie.title}</h3>
@@ -1158,17 +1199,18 @@ const ContentBelt = React.memo(function ContentBelt({
   const canKeepLoading = Boolean(onLoadMore) && (!isExhausted || resolvedBeltKey === 'recommendations')
   const watchlistIdSet = useMemo(() => new Set(watchlistMovieIds), [watchlistMovieIds])
 
-  if (items.length === 0) return null
-
-  const beltItems = items.slice(0, visibleCount)
+  const beltItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount])
   const hasMoreItems = visibleCount < items.length || canKeepLoading
-  const scrollBelt = (direction) => {
+  const scrollBelt = useCallback((direction) => {
+    if (!beltRef.current) return
+
+    const scrollAmount = Math.max(window.innerWidth * 0.72, 280)
     beltRef.current?.scrollBy({
-      left: direction === 'left' ? -Math.max(window.innerWidth * 0.72, 280) : Math.max(window.innerWidth * 0.72, 280),
-      behavior: 'smooth'
+      left: direction === 'left' ? -scrollAmount : scrollAmount,
+      behavior: getSmoothScrollBehavior()
     })
-  }
-  const loadMoreItems = async () => {
+  }, [])
+  const loadMoreItems = useCallback(async () => {
     if (isLoadingMore) return
 
     const targetCount = visibleCount + BELT_ITEM_BATCH_SIZE
@@ -1206,7 +1248,19 @@ const ContentBelt = React.memo(function ContentBelt({
       [resolvedBeltKey]: targetCount
     }))
     restoreThenAdvance()
-  }
+  }, [
+    isLoadingMore,
+    items.length,
+    onLoadMore,
+    resolvedBeltKey,
+    scrollBelt,
+    setBeltVisibleCounts,
+    setExhaustedBeltKeys,
+    setLoadingMoreBeltKeys,
+    visibleCount
+  ])
+
+  if (items.length === 0) return null
 
   return (
     <section className="content-belt" aria-labelledby={`belt-${title.replace(/\s+/g, '-').toLowerCase()}`}>
@@ -2021,6 +2075,7 @@ const BrowsePage = () => {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem(COOKIE_NOTICE_STORAGE_KEY) === 'accepted'
   })
+  const [_isListTransitionPending, startListTransition] = useTransition()
   const moviesSectionRef = useRef(null)
   const browseRowsRef = useRef(null)
   const _trendingRowRef = useRef(null)
@@ -2031,6 +2086,16 @@ const BrowsePage = () => {
   const tasteProfileRef = useRef(DEFAULT_TASTE_PROFILE)
   const tasteProfileSyncTimeoutRef = useRef(null)
   const skipNextTitleFetchRef = useRef(false)
+  const pendingRuntimeKeysRef = useRef(new Set())
+  const deferredMovieList = useDeferredValue(movieList)
+  const deferredTrendingMovies = useDeferredValue(trendingMovies)
+  const deferredTopRatedMovies = useDeferredValue(topRatedMovies)
+  const deferredRecommendationPoolMovies = useDeferredValue(recommendationPoolMovies)
+  const deferredFavoriteMovies = useDeferredValue(favoriteMovies)
+  const deferredWatchlistMovies = useDeferredValue(watchlistMovies)
+  const deferredRecentlyWatchedMovies = useDeferredValue(recentlyWatchedMovies)
+  const deferredGenreRows = useDeferredValue(genreRows)
+  const deferredSearchTitleResults = useDeferredValue(searchTitleResults)
 
   const selectedGenreSet = useMemo(() => new Set(selectedGenreIds), [selectedGenreIds])
   const mediaPluralLabel = useMemo(() => getMediaPluralLabel(mediaFilter), [mediaFilter])
@@ -2114,7 +2179,7 @@ const BrowsePage = () => {
     sendHeroVideoCommand('playVideo')
   }
 
-  const enrichMoviesWithRuntime = (movies) => upsertRuntime(movies, movieRuntimeMap)
+  const enrichMoviesWithRuntime = useCallback((movies) => upsertRuntime(movies, movieRuntimeMap), [movieRuntimeMap])
   const activeTasteProfile = useMemo(() => normalizeTasteProfileForApp(tasteProfile), [tasteProfile])
   const tasteGenreOptions = useMemo(() => getTasteGenreOptions(genreList), [genreList])
   const recommendationRotationSeed = useMemo(() => [
@@ -2149,13 +2214,13 @@ const BrowsePage = () => {
   }, [])
 
   const recommendationItems = useMemo(() => buildRecommendations({
-    movieList,
-    trendingMovies,
-    topRatedMovies,
-    recommendationPoolMovies,
-    favoriteMovies,
-    recentlyWatchedMovies,
-    genreRows,
+    movieList: deferredMovieList,
+    trendingMovies: deferredTrendingMovies,
+    topRatedMovies: deferredTopRatedMovies,
+    recommendationPoolMovies: deferredRecommendationPoolMovies,
+    favoriteMovies: deferredFavoriteMovies,
+    recentlyWatchedMovies: deferredRecentlyWatchedMovies,
+    genreRows: deferredGenreRows,
     genreList,
     selectedGenreIds,
     tasteProfile: activeTasteProfile,
@@ -2164,27 +2229,27 @@ const BrowsePage = () => {
     recommendationRotationSeed
   }), [
     activeTasteProfile,
-    favoriteMovies,
+    deferredFavoriteMovies,
+    deferredGenreRows,
+    deferredMovieList,
+    deferredRecommendationPoolMovies,
+    deferredRecentlyWatchedMovies,
+    deferredTopRatedMovies,
+    deferredTrendingMovies,
     genreList,
-    genreRows,
-    movieList,
     movieRuntimeMap,
-    recommendationPoolMovies,
     recommendationPoolLimit,
     recommendationRotationSeed,
-    recentlyWatchedMovies,
     selectedGenreIds,
-    topRatedMovies,
-    trendingMovies
   ])
   const personalizedSearchResults = useMemo(() => {
     if (debouncedSearchTerm.trim().length < SEARCH_MIN_LENGTH) return []
 
     const rankedResults = buildRecommendations({
-      movieList: searchTitleResults,
+      movieList: deferredSearchTitleResults,
       trendingMovies: [],
       topRatedMovies: [],
-      favoriteMovies,
+      favoriteMovies: deferredFavoriteMovies,
       recentlyWatchedMovies: [],
       genreRows: [],
       genreList,
@@ -2193,16 +2258,16 @@ const BrowsePage = () => {
       runtimeMap: movieRuntimeMap
     })
     const rankedKeys = new Set(rankedResults.map((movie) => getMediaItemKey(movie)))
-    const remainingResults = searchTitleResults.filter((movie) => !rankedKeys.has(getMediaItemKey(movie)))
+    const remainingResults = deferredSearchTitleResults.filter((movie) => !rankedKeys.has(getMediaItemKey(movie)))
 
     return [...rankedResults, ...remainingResults]
   }, [
     activeTasteProfile,
     debouncedSearchTerm,
-    favoriteMovies,
+    deferredFavoriteMovies,
+    deferredSearchTitleResults,
     genreList,
     movieRuntimeMap,
-    searchTitleResults,
     selectedGenreIds
   ])
   const recommendationAccent = isAuthenticated
@@ -2210,15 +2275,15 @@ const BrowsePage = () => {
     : 'Log in for personal picks'
   const heroQueueItems = useMemo(() => {
     const queueByMode = {
-      trending: trendingMovies,
-      popular: movieList,
+      trending: deferredTrendingMovies,
+      popular: deferredMovieList,
       recommended: recommendationItems
     }
-    const selectedQueue = queueByMode[heroQueueMode] || trendingMovies
-    const fallbackQueue = selectedQueue.length > 0 ? selectedQueue : trendingMovies
+    const selectedQueue = queueByMode[heroQueueMode] || deferredTrendingMovies
+    const fallbackQueue = selectedQueue.length > 0 ? selectedQueue : deferredTrendingMovies
 
     return fallbackQueue.filter((movie) => movie.backdrop_path || movie.poster_path)
-  }, [heroQueueMode, movieList, recommendationItems, trendingMovies])
+  }, [deferredMovieList, deferredTrendingMovies, heroQueueMode, recommendationItems])
 
   const fetchGenres = async (selectedMediaFilter) => {
     try {
@@ -2259,8 +2324,10 @@ const BrowsePage = () => {
       const normalizedQuery = query.trim()
 
       if (normalizedQuery.length > 0 && normalizedQuery.length < SEARCH_MIN_LENGTH) {
-        setMovieList([])
-        setTotalPages(1)
+        startListTransition(() => {
+          setMovieList([])
+          setTotalPages(1)
+        })
         setErrorMessage(`Enter at least ${SEARCH_MIN_LENGTH} characters to search`)
         return
       }
@@ -2303,13 +2370,17 @@ const BrowsePage = () => {
 
       const normalizedResults = normalizeMediaList(data.results || [], selectedMediaFilter)
 
-      setMovieList(enrichMoviesWithRuntime(normalizedResults))
-      setBeltPages((currentPages) => ({ ...currentPages, popular: page }))
-      setTotalPages(Math.min(data.total_pages || 1, 500))
+      startListTransition(() => {
+        setMovieList(enrichMoviesWithRuntime(normalizedResults))
+        setBeltPages((currentPages) => ({ ...currentPages, popular: page }))
+        setTotalPages(Math.min(data.total_pages || 1, 500))
+      })
     } catch (error) {
       console.log(`Error fetching titles: ${error}`)
       setErrorMessage('Error fetching titles. Please try again later')
-      setMovieList([])
+      startListTransition(() => {
+        setMovieList([])
+      })
     } finally {
       setIsLoading(false)
     }
@@ -2319,7 +2390,9 @@ const BrowsePage = () => {
     const normalizedQuery = query.trim()
 
     if (normalizedQuery.length < SEARCH_MIN_LENGTH) {
-      setSearchTitleResults([])
+      startListTransition(() => {
+        setSearchTitleResults([])
+      })
       return
     }
 
@@ -2343,10 +2416,14 @@ const BrowsePage = () => {
         PERSISTENT_CACHE_TTL_MS
       )
 
-      setSearchTitleResults(enrichMoviesWithRuntime(normalizeMediaList(data.results || [], selectedMediaFilter)))
+      startListTransition(() => {
+        setSearchTitleResults(enrichMoviesWithRuntime(normalizeMediaList(data.results || [], selectedMediaFilter)))
+      })
     } catch (error) {
       console.log(`Error fetching search titles: ${error}`)
-      setSearchTitleResults([])
+      startListTransition(() => {
+        setSearchTitleResults([])
+      })
     }
   }
 
@@ -2420,10 +2497,12 @@ const BrowsePage = () => {
     queueTasteProfileSync(nextProfile)
 
     if (credits.length > 0) {
-      setRecommendationPoolMovies((currentMovies) =>
-        appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(credits.slice(0, 36)))
-      )
-      setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+      startListTransition(() => {
+        setRecommendationPoolMovies((currentMovies) =>
+          appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(credits.slice(0, 36)))
+        )
+        setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+      })
     }
   }
 
@@ -2456,10 +2535,12 @@ const BrowsePage = () => {
         })
 
       learnFromPersonSearch(person, normalizedCredits)
-      setMovieList(enrichMoviesWithRuntime(appendUniqueMediaItems([], normalizedCredits)))
+      startListTransition(() => {
+        setMovieList(enrichMoviesWithRuntime(appendUniqueMediaItems([], normalizedCredits)))
+        setCurrentPage(1)
+        setTotalPages(1)
+      })
       skipNextTitleFetchRef.current = true
-      setCurrentPage(1)
-      setTotalPages(1)
       setIsHeroCollapsed(true)
       setIsSearchOpen(false)
     } catch (error) {
@@ -2500,10 +2581,12 @@ const BrowsePage = () => {
 
       if (learnedTitles.length === 0) return
 
-      setRecommendationPoolMovies((currentMovies) =>
-        appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(learnedTitles))
-      )
-      setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+      startListTransition(() => {
+        setRecommendationPoolMovies((currentMovies) =>
+          appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(learnedTitles))
+        )
+        setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+      })
     } catch (error) {
       console.log(`Error loading preferred people recommendations: ${error}`)
     }
@@ -2531,11 +2614,15 @@ const BrowsePage = () => {
 
       const results = normalizeMediaList((data.results || []).slice(0, 20), selectedMediaFilter)
 
-      setTrendingMovies(enrichMoviesWithRuntime(results))
-      setBeltPages((currentPages) => ({ ...currentPages, trending: 1 }))
+      startListTransition(() => {
+        setTrendingMovies(enrichMoviesWithRuntime(results))
+        setBeltPages((currentPages) => ({ ...currentPages, trending: 1 }))
+      })
     } catch (error) {
       console.log(`Error fetching trending titles: ${error}`)
-      setTrendingMovies([])
+      startListTransition(() => {
+        setTrendingMovies([])
+      })
     } finally {
       setIsTrendingLoading(false)
     }
@@ -2573,11 +2660,15 @@ const BrowsePage = () => {
         setCacheEntry(cacheKey, data)
       }
 
-      setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 20), selectedMediaFilter)))
-      setBeltPages((currentPages) => ({ ...currentPages, topRated: 1 }))
+      startListTransition(() => {
+        setTopRatedMovies(enrichMoviesWithRuntime(normalizeMediaList((data.results || []).slice(0, 20), selectedMediaFilter)))
+        setBeltPages((currentPages) => ({ ...currentPages, topRated: 1 }))
+      })
     } catch (error) {
       console.log(`Error fetching top rated titles: ${error}`)
-      setTopRatedMovies([])
+      startListTransition(() => {
+        setTopRatedMovies([])
+      })
     } finally {
       setIsTopRatedLoading(false)
     }
@@ -2585,7 +2676,9 @@ const BrowsePage = () => {
 
   const fetchGenreRows = async (selectedMediaFilter = 'movie', availableGenres = []) => {
     if (availableGenres.length === 0) {
-      setGenreRows([])
+      startListTransition(() => {
+        setGenreRows([])
+      })
       return
     }
 
@@ -2600,7 +2693,9 @@ const BrowsePage = () => {
       const cachedRows = getCacheEntry(rowsCacheKey)
 
       if (Array.isArray(cachedRows) && cachedRows.length > 0) {
-        setGenreRows(cachedRows)
+        startListTransition(() => {
+          setGenreRows(cachedRows)
+        })
         return
       }
 
@@ -2616,7 +2711,9 @@ const BrowsePage = () => {
         populatedRows.push(...rowBatch)
 
         if (populatedRows.length > 0) {
-          setGenreRows([...populatedRows])
+          startListTransition(() => {
+            setGenreRows([...populatedRows])
+          })
         }
       }
 
@@ -2624,7 +2721,9 @@ const BrowsePage = () => {
         setCacheEntry(rowsCacheKey, populatedRows, PERSISTENT_CACHE_TTL_MS)
       }
 
-      setGenreRows(populatedRows)
+      startListTransition(() => {
+        setGenreRows(populatedRows)
+      })
     } catch (error) {
       console.log(`Error fetching genre rows: ${error}`)
       setGenreRows((currentRows) => currentRows)
@@ -2633,7 +2732,7 @@ const BrowsePage = () => {
     }
   }
 
-  const fetchTitlePage = async ({
+  const fetchTitlePage = useCallback(async ({
     page,
     query = '',
     genreIds = [],
@@ -2684,7 +2783,7 @@ const BrowsePage = () => {
       items: normalizeMediaList(data.results || [], selectedMediaFilter),
       totalPages: Math.min(data.total_pages || 1, 500)
     }
-  }
+  }, [])
 
   const loadMoreRecommendedTitles = async () => {
     const startPage = (beltPages.recommendations || 1) + 1
@@ -2766,9 +2865,11 @@ const BrowsePage = () => {
 
       if (loadedItems.length === 0) return !reachedEnd
 
-      setRecommendationPoolMovies((currentMovies) =>
-        appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(loadedItems))
-      )
+      startListTransition(() => {
+        setRecommendationPoolMovies((currentMovies) =>
+          appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(loadedItems))
+        )
+      })
       return true
     } catch (error) {
       console.log(`Error loading more recommended titles: ${error}`)
@@ -2776,7 +2877,7 @@ const BrowsePage = () => {
     }
   }
 
-  const loadMorePopularTitles = async () => {
+  const loadMorePopularTitles = useCallback(async () => {
     const nextPage = (beltPages.popular || 1) + 1
     if (nextPage > totalPages) return false
 
@@ -2790,16 +2891,18 @@ const BrowsePage = () => {
 
       if (items.length === 0) return false
 
-      setMovieList((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(items)))
-      setBeltPages((currentPages) => ({ ...currentPages, popular: nextPage }))
+      startListTransition(() => {
+        setMovieList((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(items)))
+        setBeltPages((currentPages) => ({ ...currentPages, popular: nextPage }))
+      })
       return true
     } catch (error) {
       console.log(`Error loading more popular titles: ${error}`)
       return false
     }
-  }
+  }, [beltPages.popular, enrichMoviesWithRuntime, fetchTitlePage, mediaFilter, selectedGenreIds, startListTransition, totalPages])
 
-  const loadMoreTopRatedTitles = async () => {
+  const loadMoreTopRatedTitles = useCallback(async () => {
     const nextPage = (beltPages.topRated || 1) + 1
 
     try {
@@ -2813,16 +2916,18 @@ const BrowsePage = () => {
 
       if (items.length === 0 || nextPage > nextTotalPages) return false
 
-      setTopRatedMovies((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(items)))
-      setBeltPages((currentPages) => ({ ...currentPages, topRated: nextPage }))
+      startListTransition(() => {
+        setTopRatedMovies((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(items)))
+        setBeltPages((currentPages) => ({ ...currentPages, topRated: nextPage }))
+      })
       return true
     } catch (error) {
       console.log(`Error loading more top rated titles: ${error}`)
       return false
     }
-  }
+  }, [beltPages.topRated, enrichMoviesWithRuntime, fetchTitlePage, mediaFilter, selectedGenreIds, startListTransition])
 
-  const loadMoreTrendingTitles = async () => {
+  const loadMoreTrendingTitles = useCallback(async () => {
     const nextPage = (beltPages.trending || 1) + 1
 
     try {
@@ -2843,14 +2948,16 @@ const BrowsePage = () => {
 
       if (matchingItems.length === 0 || nextPage > Math.min(data.total_pages || 1, 500)) return false
 
-      setTrendingMovies((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(matchingItems)))
-      setBeltPages((currentPages) => ({ ...currentPages, trending: nextPage }))
+      startListTransition(() => {
+        setTrendingMovies((currentMovies) => appendUniqueMediaItems(currentMovies, enrichMoviesWithRuntime(matchingItems)))
+        setBeltPages((currentPages) => ({ ...currentPages, trending: nextPage }))
+      })
       return true
     } catch (error) {
       console.log(`Error loading more trending titles: ${error}`)
       return false
     }
-  }
+  }, [beltPages.trending, enrichMoviesWithRuntime, mediaFilter, selectedGenreIds, startListTransition])
 
   const loadMoreGenreRow = async (rowId) => {
     const row = genreRows.find((genreRow) => genreRow.id === rowId)
@@ -2880,18 +2987,20 @@ const BrowsePage = () => {
 
       if (nextItems.length === 0) return false
 
-      setGenreRows((currentRows) =>
-        currentRows.map((currentRow) => {
-          if (currentRow.id !== row.id) return currentRow
+      startListTransition(() => {
+        setGenreRows((currentRows) =>
+          currentRows.map((currentRow) => {
+            if (currentRow.id !== row.id) return currentRow
 
-          return {
-            ...currentRow,
-            items: appendUniqueMediaItems(currentRow.items, nextItems),
-            nextPage: nextPage + 1,
-            totalPages: Math.min(data.total_pages || currentRow.totalPages || 1, 500)
-          }
-        })
-      )
+            return {
+              ...currentRow,
+              items: appendUniqueMediaItems(currentRow.items, nextItems),
+              nextPage: nextPage + 1,
+              totalPages: Math.min(data.total_pages || currentRow.totalPages || 1, 500)
+            }
+          })
+        )
+      })
       return true
     } catch (error) {
       console.log(`Error loading more ${row.title} titles: ${error}`)
@@ -2911,10 +3020,14 @@ const BrowsePage = () => {
     try {
       const data = await authApi.getFavorites(authUser.id)
       const favorites = (data?.favorites || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
-      setFavoriteMovies(enrichMoviesWithRuntime(favorites))
+      startListTransition(() => {
+        setFavoriteMovies(enrichMoviesWithRuntime(favorites))
+      })
     } catch (error) {
       console.log(`Error loading favorites: ${error}`)
-      setFavoriteMovies([])
+      startListTransition(() => {
+        setFavoriteMovies([])
+      })
     } finally {
       setIsFavoritesLoading(false)
     }
@@ -2932,10 +3045,14 @@ const BrowsePage = () => {
     try {
       const data = await authApi.getWatchlist(authUser.id)
       const watchlist = (data?.items || []).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
-      setWatchlistMovies(enrichMoviesWithRuntime(watchlist))
+      startListTransition(() => {
+        setWatchlistMovies(enrichMoviesWithRuntime(watchlist))
+      })
     } catch (error) {
       console.log(`Error loading watchlist: ${error}`)
-      setWatchlistMovies([])
+      startListTransition(() => {
+        setWatchlistMovies([])
+      })
     } finally {
       setIsWatchlistLoading(false)
     }
@@ -2957,11 +3074,15 @@ const BrowsePage = () => {
       const mergedItems = mergeWatchHistoryItems(remoteItems, localItems)
 
       setLocalWatchHistory(authUser.id, mergedItems)
-      setRecentlyWatchedMovies(enrichMoviesWithRuntime(mergedItems.slice(0, 12)))
+      startListTransition(() => {
+        setRecentlyWatchedMovies(enrichMoviesWithRuntime(mergedItems.slice(0, 12)))
+      })
     } catch (error) {
       console.log(`Error loading recently watched titles: ${error}`)
       const localItems = getLocalWatchHistory(authUser.id).map((entry) => normalizeMediaItem(entry, entry?.media_type || 'movie'))
-      setRecentlyWatchedMovies(enrichMoviesWithRuntime(sortWatchHistoryItems(localItems)))
+      startListTransition(() => {
+        setRecentlyWatchedMovies(enrichMoviesWithRuntime(sortWatchHistoryItems(localItems)))
+      })
     } finally {
       setIsRecentlyWatchedLoading(false)
     }
@@ -3016,11 +3137,13 @@ const BrowsePage = () => {
     }
 
     if (closeQuiz) {
-      setRecommendationPoolMovies([])
-      setRecommendationPoolLimit(INITIAL_RECOMMENDATION_POOL_LIMIT)
-      setBeltPages((currentPages) => ({ ...currentPages, recommendations: 1 }))
-      setBeltVisibleCounts((currentCounts) => ({ ...currentCounts, recommendations: INITIAL_BELT_ITEM_COUNT }))
-      setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+      startListTransition(() => {
+        setRecommendationPoolMovies([])
+        setRecommendationPoolLimit(INITIAL_RECOMMENDATION_POOL_LIMIT)
+        setBeltPages((currentPages) => ({ ...currentPages, recommendations: 1 }))
+        setBeltVisibleCounts((currentCounts) => ({ ...currentCounts, recommendations: INITIAL_BELT_ITEM_COUNT }))
+        setExhaustedBeltKeys((currentKeys) => currentKeys.filter((key) => key !== 'recommendations'))
+      })
     }
 
     if (!syncAccount || !isAuthenticated || !authUser?.id) {
@@ -3109,7 +3232,7 @@ const BrowsePage = () => {
     setProfileStatusMessage('Hidden picks cleared.')
   }
 
-  const toggleFavoriteMovie = async (movie) => {
+  const toggleFavoriteMovie = useCallback(async (movie) => {
     if (!isAuthenticated) {
       setAuthErrorMessage('')
       navigate('/account/login')
@@ -3148,9 +3271,9 @@ const BrowsePage = () => {
         return currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
       })
     }
-  }
+  }, [authUser?.id, favoriteMovieIds, isAuthenticated, movieRuntimeMap, navigate])
 
-  const toggleWatchlistMovie = async (movie) => {
+  const toggleWatchlistMovie = useCallback(async (movie) => {
     if (!isAuthenticated) {
       setAuthErrorMessage('')
       navigate('/account/login')
@@ -3185,7 +3308,7 @@ const BrowsePage = () => {
         return currentMovies.filter((entry) => getMediaItemKey(entry) !== movieKey)
       })
     }
-  }
+  }, [authUser?.id, isAuthenticated, movieRuntimeMap, navigate, watchlistMovieIds])
 
   const openTitleDetails = useCallback((movie) => {
     if (isAuthenticated) {
@@ -3193,19 +3316,21 @@ const BrowsePage = () => {
         console.log(`Error tracking recently watched title: ${error}`)
       })
 
-      setRecentlyWatchedMovies((currentMovies) => {
-        const normalizedMovie = normalizeMediaItem({
-          ...movie,
-          watched_at: new Date().toISOString()
-        }, movie.media_type || 'movie')
-        const normalizedMovieKey = getMediaItemKey(normalizedMovie)
-        const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== normalizedMovieKey)
-        return [normalizedMovie, ...withoutMovie].slice(0, 12)
+      startListTransition(() => {
+        setRecentlyWatchedMovies((currentMovies) => {
+          const normalizedMovie = normalizeMediaItem({
+            ...movie,
+            watched_at: new Date().toISOString()
+          }, movie.media_type || 'movie')
+          const normalizedMovieKey = getMediaItemKey(normalizedMovie)
+          const withoutMovie = currentMovies.filter((entry) => getMediaItemKey(entry) !== normalizedMovieKey)
+          return [normalizedMovie, ...withoutMovie].slice(0, 12)
+        })
       })
     }
 
-    navigate(getDetailPath(movie), { state: { backgroundLocation: location } })
-  }, [authUser?.id, isAuthenticated, location, navigate])
+    navigate(getDetailPath(movie), { state: { backgroundLocation: location, previewMovie: movie } })
+  }, [authUser?.id, isAuthenticated, location, navigate, startListTransition])
 
   const handleWatchProgress = useCallback((movie) => {
     const normalizedMovie = normalizeMediaItem(movie, movie.media_type || 'movie')
@@ -3372,50 +3497,66 @@ const BrowsePage = () => {
   }
 
   const fetchMovieRuntimes = async (movies) => {
-    const missingMovies = movies.filter((movie) => movieRuntimeMap[getRuntimeKey(movie)] === undefined)
+    const missingMovies = movies
+      .filter((movie) => {
+        const runtimeKey = getRuntimeKey(movie)
+        return movieRuntimeMap[runtimeKey] === undefined && !pendingRuntimeKeysRef.current.has(runtimeKey)
+      })
+      .slice(0, MAX_RUNTIME_FETCH_BATCH)
 
     if (missingMovies.length === 0) {
       return
     }
 
+    missingMovies.forEach((movie) => {
+      pendingRuntimeKeysRef.current.add(getRuntimeKey(movie))
+    })
+
     try {
-      const runtimeEntries = await Promise.all(
-        missingMovies.map(async (movie) => {
-          const requestUrl = `${movie.media_type}:${movie.id}`
-          const cachedDetail = getCacheEntry(getCacheKey('detail', requestUrl))
+      const runtimeEntries = []
 
-          if (cachedDetail) {
-            return [getRuntimeKey(movie), cachedDetail.runtime || cachedDetail.episode_run_time?.[0] || null]
-          }
+      for (let index = 0; index < missingMovies.length; index += RUNTIME_FETCH_CONCURRENCY) {
+        const movieBatch = missingMovies.slice(index, index + RUNTIME_FETCH_CONCURRENCY)
+        const batchEntries = await Promise.all(
+          movieBatch.map(async (movie) => {
+            const requestUrl = `${movie.media_type}:${movie.id}`
+            const cachedDetail = getCacheEntry(getCacheKey('detail', requestUrl))
 
-          const detailEndpoint = movie.media_type === 'tv' ? 'tv' : 'movie'
-          const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${movie.id}`, API_OPTIONS)
+            if (cachedDetail) {
+              return [getRuntimeKey(movie), cachedDetail.runtime || cachedDetail.episode_run_time?.[0] || null]
+            }
 
-          if (!response.ok) {
-            return [getRuntimeKey(movie), null]
-          }
+            const detailEndpoint = movie.media_type === 'tv' ? 'tv' : 'movie'
+            const response = await fetch(`${API_BASE_URL}/${detailEndpoint}/${movie.id}`, API_OPTIONS)
 
-          const data = await response.json()
-          setCacheEntry(getCacheKey('detail', requestUrl), data)
-          const runtimeValue = data.runtime || data.episode_run_time?.[0] || null
-          return [getRuntimeKey(movie), runtimeValue]
-        })
-      )
+            if (!response.ok) {
+              return [getRuntimeKey(movie), null]
+            }
+
+            const data = await response.json()
+            setCacheEntry(getCacheKey('detail', requestUrl), data)
+            const runtimeValue = data.runtime || data.episode_run_time?.[0] || null
+            return [getRuntimeKey(movie), runtimeValue]
+          })
+        )
+
+        runtimeEntries.push(...batchEntries)
+      }
 
       const runtimeMap = Object.fromEntries(runtimeEntries)
 
-      setMovieRuntimeMap((currentMap) => ({
-        ...currentMap,
-        ...runtimeMap
-      }))
-
-      setMovieList((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
-      setTrendingMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
-      setTopRatedMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
-      setFavoriteMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
-      setRecentlyWatchedMovies((currentMovies) => upsertRuntime(currentMovies, runtimeMap))
+      startListTransition(() => {
+        setMovieRuntimeMap((currentMap) => ({
+          ...currentMap,
+          ...runtimeMap
+        }))
+      })
     } catch (error) {
       console.log(`Error fetching runtimes: ${error}`)
+    } finally {
+      missingMovies.forEach((movie) => {
+        pendingRuntimeKeysRef.current.delete(getRuntimeKey(movie))
+      })
     }
   }
 
@@ -3863,7 +4004,7 @@ const BrowsePage = () => {
       )
     }
 
-    if (recentlyWatchedMovies.length === 0) {
+    if (deferredRecentlyWatchedMovies.length === 0) {
       return (
         <section className="continue-watching-section" aria-labelledby="continue-watching-title">
           <div className="continue-watching-heading">
@@ -3888,7 +4029,7 @@ const BrowsePage = () => {
         </div>
 
         <div className="continue-watching-row">
-          {recentlyWatchedMovies.slice(0, 12).map((movie) => {
+          {deferredRecentlyWatchedMovies.slice(0, 12).map((movie) => {
             const resumeTimeSeconds = getResumeTimeSeconds(movie)
             const progressPercent = getProgressPercent(movie)
 
@@ -3935,7 +4076,7 @@ const BrowsePage = () => {
     )
   }
 
-  const heroBackdrop = heroTitle ? getBackdropUrl(heroTitle, 'original') : '/hero-bg.png'
+  const heroBackdrop = heroTitle ? getBackdropUrl(heroTitle, 'w1280') : '/hero-bg.png'
   const heroMediaStyle = { backgroundImage: `url(${heroBackdrop})` }
   const changeHeroTitle = (direction) => {
     if (heroQueueItems.length === 0) return
@@ -3943,16 +4084,18 @@ const BrowsePage = () => {
     setIsHeroCollapsed(false)
     setHeroIndex((currentIndex) => (currentIndex + direction + heroQueueItems.length) % heroQueueItems.length)
     requestAnimationFrame(() => {
-      document.querySelector('.stream-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      document.querySelector('.stream-hero')?.scrollIntoView({ behavior: getSmoothScrollBehavior(), block: 'start' })
     })
   }
   const toggleHeroFocus = useCallback(() => {
     setIsHeroCollapsed((isCollapsed) => !isCollapsed)
   }, [])
-  const filteredTrendingMovies = selectedGenreIds.length > 0
-    ? trendingMovies.filter((movie) => movie.genre_ids?.some((genreId) => selectedGenreIds.includes(genreId)))
-    : trendingMovies
-  const heroRows = [
+  const filteredTrendingMovies = useMemo(() =>
+    selectedGenreIds.length > 0
+      ? deferredTrendingMovies.filter((movie) => movie.genre_ids?.some((genreId) => selectedGenreIds.includes(genreId)))
+      : deferredTrendingMovies,
+  [deferredTrendingMovies, selectedGenreIds])
+  const heroRows = useMemo(() => [
     {
       id: 'trending',
       title: `Trending ${mediaPluralLabel}`,
@@ -3963,18 +4106,26 @@ const BrowsePage = () => {
     {
       id: 'top-rated',
       title: `Top Rated ${mediaPluralLabel}`,
-      items: topRatedMovies,
+      items: deferredTopRatedMovies,
       accent: 'Highest rated',
       onLoadMore: loadMoreTopRatedTitles
     },
     {
       id: 'popular',
       title: `Popular ${mediaPluralLabel}`,
-      items: movieList,
+      items: deferredMovieList,
       accent: 'This week',
       onLoadMore: loadMorePopularTitles
     }
-  ]
+  ], [
+    deferredMovieList,
+    deferredTopRatedMovies,
+    filteredTrendingMovies,
+    loadMorePopularTitles,
+    loadMoreTopRatedTitles,
+    loadMoreTrendingTitles,
+    mediaPluralLabel
+  ])
   const searchResults = debouncedSearchTerm.trim().length >= SEARCH_MIN_LENGTH ? personalizedSearchResults : []
 
   if (legalDocumentType) {
@@ -4333,11 +4484,11 @@ const BrowsePage = () => {
 
         <section className="stream-belts" aria-label="Browse rows" ref={browseRowsRef}>
           {isWatchlistFocused ? (
-            watchlistMovies.length > 0 ? (
+            deferredWatchlistMovies.length > 0 ? (
               <ContentBelt
                 title="Your Watchlist"
-                items={watchlistMovies}
-                accent={`${watchlistMovies.length} saved`}
+                items={deferredWatchlistMovies}
+                accent={`${deferredWatchlistMovies.length} saved`}
                 headingAction={(
                   <button
                     type="button"
@@ -4371,7 +4522,7 @@ const BrowsePage = () => {
           ) : selectedPersonResult ? (
             <ContentBelt
               title={`${selectedPersonResult.name} ${mediaPluralLabel}`}
-              items={movieList}
+              items={deferredMovieList}
               accent={selectedPersonResult.known_for_department || 'Person search'}
               headingAction={(
                 <button
@@ -4458,7 +4609,7 @@ const BrowsePage = () => {
                 </div>
               )}
 
-              {genreRows.map((row) => (
+              {deferredGenreRows.map((row) => (
                 <ContentBelt
                   key={`genre-row-${row.id}`}
                   title={`${row.title} ${mediaPluralLabel}`}
