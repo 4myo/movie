@@ -80,10 +80,31 @@ autoUpdater.on('update-downloaded', () => mainWindow?.webContents.send('update-d
 ipcMain.on('install-update', () => autoUpdater.quitAndInstall(false, true));
 
 app.whenReady().then(() => {
-  // Strip "Electron/x.x.x" from the UA at the session level — userAgentFallback alone isn't enough
   const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
   session.defaultSession.setUserAgent(chromeUA);
   app.userAgentFallback = chromeUA;
+
+  // Intercept every outgoing request:
+  //  1. Scrub "Electron/x.x.x" from the UA — setUserAgent() alone misses some sub-frames
+  //  2. Replace app:// Referer on YouTube requests — their server rejects non-http referrers
+  //     with a broken player config (Error 153) before the player JS even runs
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const ua = details.requestHeaders['User-Agent'] || '';
+    details.requestHeaders['User-Agent'] = ua.replace(/Electron\/[\d.]+ ?/g, '').trim();
+
+    const isYouTube = /youtube(-nocookie)?\.com|ytimg\.com|googlevideo\.com/.test(details.url);
+    if (isYouTube) {
+      const referer = details.requestHeaders['Referer'] || '';
+      if (referer.startsWith('app://') || referer.startsWith('file://')) {
+        details.requestHeaders['Referer'] = 'https://www.youtube.com/';
+      }
+      if (!details.requestHeaders['Origin'] || details.requestHeaders['Origin'].startsWith('app://')) {
+        details.requestHeaders['Origin'] = 'https://www.youtube.com';
+      }
+    }
+
+    callback({ requestHeaders: details.requestHeaders });
+  });
 
   // Serve the built app via app:// — gives a proper secure origin and fixes React Router navigation
   protocol.handle('app', async (request) => {

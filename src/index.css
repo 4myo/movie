@@ -130,6 +130,30 @@
     @apply text-xs font-black uppercase tracking-[0.22em] text-white/52;
   }
 
+  .download-app-badge {
+    @apply fixed top-4 left-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full no-underline;
+    background: rgba(8, 8, 24, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(16px);
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    transition: background 0.18s, color 0.18s, border-color 0.18s;
+    text-decoration: none;
+  }
+  .download-app-badge:hover {
+    background: rgba(120, 80, 255, 0.28);
+    border-color: rgba(160, 120, 255, 0.45);
+    color: #fff;
+  }
+  .download-app-badge-icon {
+    @apply shrink-0;
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+  }
+
   .stream-nav {
     @apply fixed top-4 z-50 flex items-center justify-center gap-1.5 px-2 py-2;
     left: 50%;

@@ -7,6 +7,7 @@ import { AuthPage } from './components/AuthModal.jsx'
 import LegalPage from './components/LegalPage.jsx'
 import {
   BookmarkIcon,
+  DownloadIcon,
   HomeIcon,
   LogInIcon,
   LogOutIcon,
@@ -364,9 +365,13 @@ const getBestHeroVideo = (videos = []) =>
 
 const getHeroTrailerEmbedUrl = (videoKey) => {
   if (!videoKey) return ''
-  // Skip the origin param on desktop — app:// origin is rejected by YouTube
   const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop
-  const originParam = !isDesktop && typeof window !== 'undefined'
+  if (isDesktop) {
+    // enablejsapi=1 requires a valid http/https origin for its postMessage channel —
+    // app:// origin causes Error 153. Use a simple muted autoplay embed instead.
+    return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0&rel=0&modestbranding=1&playsinline=1&disablekb=1&fs=0&iv_load_policy=3`
+  }
+  const originParam = typeof window !== 'undefined'
     ? `&origin=${encodeURIComponent(window.location.origin)}`
     : ''
   return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3${originParam}`
@@ -2148,11 +2153,7 @@ const BrowsePage = () => {
 
   const sendHeroVideoCommand = useCallback((command, args = []) => {
     heroVideoRef.current?.contentWindow?.postMessage(
-      JSON.stringify({
-        event: 'command',
-        func: command,
-        args
-      }),
+      JSON.stringify({ event: 'command', func: command, args }),
       '*'
     )
   }, [])
@@ -4171,6 +4172,16 @@ const BrowsePage = () => {
   return (
     <AppShell>
       <div className={`streaming-home ${isHeroCollapsed ? 'is-browse-focused' : ''}`}>
+        {!window.electron?.isDesktop && (
+          <a
+            href="https://github.com/4myo/movie/releases/download/v1.1.1/Movieslo-Web-Setup-1.1.1.exe"
+            className="download-app-badge"
+            title="Download Movieslo for Windows"
+          >
+            <DownloadIcon className="download-app-badge-icon" />
+            <span>Download App</span>
+          </a>
+        )}
         <nav className="stream-nav" aria-label="Primary navigation">
           <button type="button" className="stream-nav-item is-active" onClick={resetToHome}>
             <HomeIcon className="stream-nav-svg" />
