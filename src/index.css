@@ -131,7 +131,7 @@
   }
 
   .stream-nav {
-    @apply fixed top-4 z-50 flex items-center justify-center gap-1.5 border border-white/12 bg-black/42 px-2 py-2 shadow-xl shadow-black/30 backdrop-blur-md;
+    @apply fixed top-4 z-50 flex items-center justify-center gap-1.5 px-2 py-2;
     left: 50%;
     right: auto;
     width: max-content;
@@ -141,8 +141,16 @@
     scrollbar-width: none;
     transform: translate3d(-50%, 0, 0);
     contain: layout paint style;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.06) 100%),
+      linear-gradient(180deg, rgba(130, 80, 255, 0.1) 0%, rgba(40, 40, 140, 0.08) 100%),
+      rgba(6, 5, 18, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.07),
+      0 8px 32px rgba(0, 0, 0, 0.5),
+      0 2px 8px rgba(0, 0, 0, 0.25);
   }
 
   .stream-nav::-webkit-scrollbar {
@@ -782,7 +790,18 @@
 
   .taste-modal,
   .profile-panel {
-    @apply w-full overflow-hidden rounded-xl border border-white/12 bg-[#050505]/92 text-left text-white shadow-2xl shadow-black/60 backdrop-blur-xl;
+    @apply w-full overflow-hidden rounded-xl text-left text-white;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.03) 100%),
+      linear-gradient(180deg, rgba(80, 40, 180, 0.14) 0%, rgba(10, 8, 30, 0.97) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+      0 32px 80px rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(28px) saturate(1.8);
+    -webkit-backdrop-filter: blur(28px) saturate(1.8);
+    animation: glass-panel-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .taste-modal {
@@ -889,7 +908,12 @@
   }
 
   .profile-settings-block {
-    @apply rounded-xl border border-white/8 bg-white/[0.035] px-4 py-4;
+    @apply rounded-xl px-4 py-4;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%),
+      rgba(8, 8, 22, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
   }
 
   .account-settings-scroll {
@@ -921,7 +945,21 @@
   }
 
   .settings-row {
-    @apply grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-lg border border-white/8 bg-black/22 px-3 py-2.5;
+    @apply grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-lg px-3 py-2.5;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 100%),
+      rgba(6, 6, 20, 0.48);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transition: background 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+  }
+
+  .settings-row:hover {
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 100%),
+      rgba(10, 10, 30, 0.56);
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
   }
 
   .settings-row > div {
@@ -993,7 +1031,17 @@
   }
 
   .profile-actions button:not(.profile-logout-action) {
-    @apply bg-white text-black hover:bg-white/84;
+    @apply text-slate-950;
+    background: linear-gradient(180deg, #ffffff 0%, rgba(236, 236, 243, 0.96) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 1),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.08),
+      0 3px 10px rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+  }
+
+  .profile-actions button:not(.profile-logout-action):hover {
+    background: linear-gradient(180deg, #ffffff 0%, rgba(220, 220, 230, 0.98) 100%);
   }
 
   .profile-logout-action {
@@ -1460,8 +1508,19 @@
   }
 
   .watch-server-panel {
-    @apply relative z-30 mt-4 w-full max-w-none border border-white/14 bg-[#181818]/92 p-3 shadow-2xl shadow-black/45 backdrop-blur-xl sm:absolute sm:left-6 sm:top-24 sm:mt-0 sm:w-[22rem] sm:max-w-[calc(100vw-3rem)];
+    @apply relative z-30 mt-4 w-full max-w-none p-3 sm:absolute sm:left-6 sm:top-24 sm:mt-0 sm:w-[22rem] sm:max-w-[calc(100vw-3rem)];
     border-radius: 0.75rem;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.04) 100%),
+      linear-gradient(180deg, rgba(80, 40, 180, 0.1) 0%, rgba(10, 8, 28, 0.9) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+      0 16px 48px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    animation: glass-panel-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .watch-server-heading {
@@ -1474,7 +1533,17 @@
 
   .watch-server-current,
   .watch-episode-grid select {
-    @apply min-h-12 w-full rounded-full border border-white/28 bg-[#4a4a4a] px-4 text-left text-base font-black text-white outline-hidden transition focus:border-white;
+    @apply min-h-12 w-full rounded-full px-4 text-left text-base font-black text-white outline-hidden transition;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 100%),
+      rgba(8, 8, 24, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.26);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  }
+
+  .watch-server-current:focus,
+  .watch-episode-grid select:focus {
+    border-color: rgba(255, 255, 255, 0.52);
   }
 
   .watch-server-current {
@@ -1482,8 +1551,15 @@
   }
 
   .watch-server-options {
-    @apply mt-0 overflow-hidden border border-white/18 bg-[#101827] shadow-xl shadow-black/30;
-    border-radius: 0 0 0.35rem 0.35rem;
+    @apply mt-0 overflow-hidden shadow-xl shadow-black/40;
+    border-radius: 0 0 0.75rem 0.75rem;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%),
+      rgba(8, 8, 26, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-top: none;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
   }
 
   .watch-server-options button {
@@ -1541,10 +1617,23 @@
   }
 
   .floating-navbar {
-    @apply fixed left-1/2 top-3 z-40 flex -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-[#080914]/88 px-3 py-2.5 text-left shadow-2xl shadow-black/35 backdrop-blur-xl sm:top-4 sm:flex-nowrap sm:gap-3 sm:px-4;
+    @apply fixed left-1/2 top-3 z-40 flex -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2.5 text-left sm:top-4 sm:flex-nowrap sm:gap-3 sm:px-4;
     width: calc(100vw - 1.5rem);
     max-width: 80rem;
     box-sizing: border-box;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.04) 100%),
+      linear-gradient(180deg, rgba(100, 60, 220, 0.1) 0%, rgba(30, 30, 100, 0.08) 100%),
+      rgba(5, 5, 16, 0.76);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+      0 8px 40px rgba(0, 0, 0, 0.55),
+      0 2px 8px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(28px) saturate(1.8);
+    -webkit-backdrop-filter: blur(28px) saturate(1.8);
+    animation: glass-nav-drop 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .floating-navbar-brand {
@@ -1560,7 +1649,10 @@
   }
 
   .floating-navbar-controls {
-    @apply order-3 grid w-full grid-cols-2 gap-1 rounded-xl border border-white/8 bg-white/[0.035] p-1 sm:order-none sm:w-auto sm:min-w-[16rem];
+    @apply order-3 grid w-full grid-cols-2 gap-1 rounded-xl p-1 sm:order-none sm:w-auto sm:min-w-[16rem];
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
   }
 
   .floating-navbar-tab {
@@ -1568,7 +1660,13 @@
   }
 
   .floating-navbar-tab.is-active {
-    @apply bg-white text-slate-950 shadow-sm shadow-black/20;
+    @apply text-slate-950;
+    background: linear-gradient(180deg, #ffffff 0%, rgba(236, 236, 243, 0.96) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 1),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.08),
+      0 3px 10px rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.7);
   }
 
   .floating-navbar-meta {
@@ -3105,50 +3203,48 @@
     }
   }
 
+  /* ─── reusable standalone classes ─────────────────────────────────────── */
   .performance-glass {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.055)),
-      rgba(10, 11, 15, 0.74);
-    border-color: rgba(255, 255, 255, 0.17);
-    color: rgba(255, 255, 255, 0.86);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.04) 60%, rgba(0, 0, 0, 0.06) 100%);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.055),
-      0 10px 24px rgba(0, 0, 0, 0.22);
+      inset 0 1px 0 rgba(255, 255, 255, 0.3),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+      0 1px 3px rgba(0, 0, 0, 0.15);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .performance-glass:hover {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.23), rgba(255, 255, 255, 0.075)),
-      rgba(17, 18, 24, 0.82);
-    border-color: rgba(255, 255, 255, 0.26);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0.08) 60%, rgba(0, 0, 0, 0.04) 100%);
+    border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.1),
+      0 2px 8px rgba(0, 0, 0, 0.2);
   }
 
   .performance-glass-primary {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.78)),
-      rgba(255, 255, 255, 0.88);
-    border-color: rgba(255, 255, 255, 0.56);
+    background: linear-gradient(180deg, #ffffff 0%, rgba(236, 236, 243, 0.96) 100%);
+    border-color: rgba(255, 255, 255, 0.72);
     color: #050507;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 1px 0 rgba(255, 255, 255, 1),
       inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-      0 10px 24px rgba(255, 255, 255, 0.08),
-      0 10px 22px rgba(0, 0, 0, 0.18);
+      0 4px 14px rgba(0, 0, 0, 0.22),
+      0 1px 3px rgba(0, 0, 0, 0.12);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .performance-glass-primary:hover {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.84)),
-      rgba(255, 255, 255, 0.92);
+    background: linear-gradient(180deg, #ffffff 0%, rgba(220, 220, 230, 0.98) 100%);
     color: #000;
   }
 
+  /* ─── dark-glass buttons (inactive / secondary / neutral) ──────────────── */
   .stream-nav,
   .stream-search-panel,
   .stream-hero-queue-switch,
@@ -3157,57 +3253,98 @@
   .stream-nav-item:not(.is-active):not(.stream-login-button),
   .stream-nav-icon:not(.stream-login-button),
   .stream-search-row button,
-  .stream-search-filters button,
-  .stream-search-genres button,
+  .stream-search-filters button:not(.is-active),
+  .stream-search-genres button:not(.is-active),
   .stream-action-secondary,
+  .stream-hero-cycle,
   .content-belt-controls button,
   .content-belt-heading-action,
   .content-belt-load-more,
   .belt-card-dismiss,
-  .belt-card-watchlist,
+  .belt-card-watchlist:not(.is-active),
   .continue-clear-button,
   .continue-card-remove,
   .continue-card-play,
   .cinematic-close-button,
   .cinematic-round-button,
-  .cinematic-player-toolbar button {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.055)),
-      rgba(10, 11, 15, 0.74);
-    border-color: rgba(255, 255, 255, 0.17);
-    color: rgba(255, 255, 255, 0.86);
+  .cinematic-player-toolbar button,
+  .taste-chip-grid button:not(.is-active),
+  .taste-segmented button:not(.is-active),
+  .taste-modal-header button,
+  .profile-panel-close,
+  .taste-secondary-action,
+  .profile-logout-action,
+  .settings-row-action,
+  .movie-modal-close,
+  .movie-modal-tab:not(.is-active),
+  .cinematic-server-grid button:not(.is-active),
+  .genre-chip:not(.is-selected),
+  .genre-filter-toggle,
+  .genre-clear-button,
+  .floating-navbar-tab:not(.is-active),
+  .floating-navbar-button.is-secondary,
+  .watch-back-button,
+  .watch-server-heading button,
+  .auth-mode-switch button:not(.is-active),
+  .content-belt-heading-action {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.04) 60%, rgba(0, 0, 0, 0.06) 100%);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.055),
-      0 10px 24px rgba(0, 0, 0, 0.22);
+      inset 0 1px 0 rgba(255, 255, 255, 0.3),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+      0 1px 3px rgba(0, 0, 0, 0.15);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
+  /* ─── dark-glass hover ──────────────────────────────────────────────────── */
   .stream-nav-item:not(.is-active):not(.stream-login-button):hover,
   .stream-nav-icon:not(.stream-login-button):hover,
   .stream-search-row button:hover,
-  .stream-search-filters button:hover,
-  .stream-search-genres button:hover,
+  .stream-search-filters button:not(.is-active):hover,
+  .stream-search-genres button:not(.is-active):hover,
   .stream-action-secondary:hover,
+  .stream-hero-cycle:hover,
   .content-belt-controls button:hover,
   .content-belt-heading-action:hover,
   .content-belt-load-more:hover,
   .belt-card-dismiss:hover,
-  .belt-card-watchlist:hover,
+  .belt-card-watchlist:not(.is-active):hover,
   .continue-clear-button:hover,
   .continue-card-remove:hover,
   .continue-card-play:hover,
   .cinematic-close-button:hover,
   .cinematic-round-button:hover,
-  .cinematic-player-toolbar button:hover {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.23), rgba(255, 255, 255, 0.075)),
-      rgba(17, 18, 24, 0.82);
-    border-color: rgba(255, 255, 255, 0.26);
+  .cinematic-player-toolbar button:hover,
+  .taste-chip-grid button:not(.is-active):hover,
+  .taste-segmented button:not(.is-active):hover,
+  .taste-modal-header button:hover,
+  .profile-panel-close:hover,
+  .taste-secondary-action:hover,
+  .profile-logout-action:hover,
+  .settings-row-action:hover,
+  .movie-modal-close:hover,
+  .movie-modal-tab:not(.is-active):hover,
+  .cinematic-server-grid button:not(.is-active):hover,
+  .genre-chip:not(.is-selected):hover,
+  .genre-filter-toggle:hover,
+  .genre-clear-button:hover,
+  .floating-navbar-tab:not(.is-active):hover,
+  .floating-navbar-button.is-secondary:hover,
+  .watch-back-button:hover,
+  .watch-server-heading button:hover,
+  .auth-mode-switch button:not(.is-active):hover {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0.08) 60%, rgba(0, 0, 0, 0.04) 100%);
+    border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.1),
+      0 2px 8px rgba(0, 0, 0, 0.2);
   }
 
+  /* ─── white-glossy buttons (active / primary) ───────────────────────────── */
   .stream-nav-item.is-active,
   .stream-login-button,
   .stream-action-primary,
@@ -3216,34 +3353,74 @@
   .content-belt-load-more span,
   .stream-search-filters .is-active,
   .stream-search-genres .is-active,
-  .belt-card-watchlist.is-active {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.78)),
-      rgba(255, 255, 255, 0.88);
-    border-color: rgba(255, 255, 255, 0.56);
+  .belt-card-watchlist.is-active,
+  .taste-chip-grid button.is-active,
+  .taste-segmented button.is-active,
+  .taste-primary-action,
+  .auth-submit,
+  .auth-mode-switch button.is-active,
+  .cinematic-server-grid button.is-active,
+  .continue-watching-info button,
+  .watchlist-empty-state button,
+  .floating-navbar-tab.is-active {
+    background: linear-gradient(180deg, #ffffff 0%, rgba(236, 236, 243, 0.96) 100%);
+    border-color: rgba(255, 255, 255, 0.72);
     color: #050507;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 1px 0 rgba(255, 255, 255, 1),
       inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-      0 10px 24px rgba(255, 255, 255, 0.08),
-      0 10px 22px rgba(0, 0, 0, 0.18);
+      0 4px 14px rgba(0, 0, 0, 0.22),
+      0 1px 3px rgba(0, 0, 0, 0.12);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
+  /* ─── soft-active (semi-lit) ────────────────────────────────────────────── */
   .stream-nav-item.is-active-soft,
   .stream-nav-icon.is-active-soft,
   .stream-hero-volume-button.is-muted,
   .cinematic-round-button.is-glow {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
-      rgba(24, 25, 32, 0.82);
-    border-color: rgba(255, 255, 255, 0.24);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.07) 60%, rgba(0, 0, 0, 0.04) 100%);
+    border-color: rgba(255, 255, 255, 0.26);
     color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.36),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.1);
   }
 
   .content-belt-load-more span {
     border-color: transparent;
+  }
+
+  /* Blur enabled on the single fixed nav pill — GPU composited, single element */
+  .stream-nav {
+    backdrop-filter: blur(22px) saturate(1.7);
+    -webkit-backdrop-filter: blur(22px) saturate(1.7);
+    animation: glass-nav-drop 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+@keyframes glass-nav-drop {
+  from {
+    opacity: 0;
+    transform: translate3d(-50%, -0.75rem, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes glass-panel-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.5rem, 0) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 

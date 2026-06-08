@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Electron loads the built app via file:// which needs relative asset paths
+  base: process.env.ELECTRON_BUILD ? './' : '/',
   server: {
     historyApiFallback: true
   },

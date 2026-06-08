@@ -1,0 +1,33 @@
+appId: com.movieslo.app
+productName: Movieslo
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+
+asar: true
+
+win:
+  target:
+    - target: nsis-web
+      arch:
+        - x64
+  publisherName: Movieslo
+  # icon: build/icon.ico  ← add a 256x256 .ico file here for a custom icon
+
+nsisWeb:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Movieslo
+
+publish:
+  provider: github
+  owner: YOUR_GITHUB_USERNAME
+  repo: YOUR_REPO_NAME
