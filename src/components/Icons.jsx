@@ -137,3 +137,12 @@ export const MonitorPlayIcon = (props) => (
     <path d="M12 17v4" />
   </SvgIcon>
 )
+
+export const UsersIcon = (props) => (
+  <SvgIcon {...props}>
+    <path d="M16 11c1.7 0 3-1.3 3-3s-1.3-3-3-3" />
+    <path d="M19 17c0-2-1.3-3.5-3-4" />
+    <circle cx="9" cy="8" r="3" />
+    <path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+  </SvgIcon>
+)

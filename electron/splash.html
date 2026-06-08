@@ -41,22 +41,25 @@
   }
 
   .logo {
-    width: 62px;
-    height: 62px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    background: #fff;
     box-shadow:
       0 0 0 1px rgba(255,255,255,0.18),
-      0 8px 28px rgba(124,58,237,0.55),
+      0 8px 28px rgba(0,0,0,0.4),
       inset 0 1px 0 rgba(255,255,255,0.32);
     display: flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 16px;
-    font-size: 26px;
-    font-weight: 800;
-    color: #fff;
-    letter-spacing: -1px;
+    overflow: hidden;
+  }
+
+  .logo img {
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
   }
 
   .app-name {
@@ -114,7 +117,7 @@
 </head>
 <body>
 <div class="card">
-  <div class="logo">M</div>
+  <div class="logo"><img src="../public/app-icon.png" alt="Movieslo" /></div>
   <div class="app-name">Movieslo</div>
   <div class="tagline">Your personal movie library</div>
   <div class="bar-track"><div class="bar-fill"></div></div>

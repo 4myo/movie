@@ -17,7 +17,7 @@ win:
       arch:
         - x64
   publisherName: Movieslo
-  # icon: build/icon.ico  ← add a 256x256 .ico file here for a custom icon
+  icon: build/icon.ico
 
 nsisWeb:
   oneClick: true
@@ -29,5 +29,6 @@ nsisWeb:
 
 publish:
   provider: github
-  owner: YOUR_GITHUB_USERNAME
-  repo: YOUR_REPO_NAME
+  owner: 4myo
+  repo: movie
+  releaseType: release

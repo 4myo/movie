@@ -14,8 +14,10 @@ import {
   SettingsIcon,
   TvIcon,
   UserIcon,
+  UsersIcon,
   VideoCameraIcon
 } from './components/Icons.jsx'
+import { FriendsPanel } from './components/FriendsPanel.jsx'
 import { supabase } from './supabaseClient.js'
 import {
   DEFAULT_STREAMING_PROVIDER_ID,
@@ -360,12 +362,15 @@ const getBestHeroVideo = (videos = []) =>
     .filter((entry) => Number.isFinite(entry.score))
     .sort((first, second) => second.score - first.score)[0]?.video || null
 
-const getHeroTrailerEmbedUrl = (videoKey) =>
-  videoKey
-    ? `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3${
-        typeof window === 'undefined' ? '' : `&origin=${encodeURIComponent(window.location.origin)}`
-      }`
+const getHeroTrailerEmbedUrl = (videoKey) => {
+  if (!videoKey) return ''
+  // Skip the origin param on desktop — app:// origin is rejected by YouTube
+  const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop
+  const originParam = !isDesktop && typeof window !== 'undefined'
+    ? `&origin=${encodeURIComponent(window.location.origin)}`
     : ''
+  return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3${originParam}`
+}
 
 const shouldPersistCacheKey = (key) => PERSISTENT_CACHE_KEYS.some((prefix) => key.startsWith(prefix))
 
@@ -2068,6 +2073,7 @@ const BrowsePage = () => {
   const [isSavingTasteProfile, setIsSavingTasteProfile] = useState(false)
   const [isPasswordResetSending, setIsPasswordResetSending] = useState(false)
   const [isProfilePanelOpen, setIsProfilePanelOpen] = useState(false)
+  const [isFriendsPanelOpen, setIsFriendsPanelOpen] = useState(false)
   const [hasDismissedTasteQuizThisSession, setHasDismissedTasteQuizThisSession] = useState(false)
   const [profileStatusMessage, setProfileStatusMessage] = useState('')
   const [deletionNotice, setDeletionNotice] = useState('')
@@ -4229,6 +4235,19 @@ const BrowsePage = () => {
             <span className="stream-nav-label">Search</span>
           </button>
 
+          {isAuthenticated && (
+            <button
+              type="button"
+              className={`stream-nav-icon ${isFriendsPanelOpen ? 'is-active-soft' : ''}`}
+              onClick={() => setIsFriendsPanelOpen(open => !open)}
+              aria-label="Friends"
+              aria-expanded={isFriendsPanelOpen}
+            >
+              <UsersIcon className="stream-nav-svg" />
+              <span className="stream-nav-label">Friends</span>
+            </button>
+          )}
+
           {isAuthenticated ? (
             <button type="button" className="stream-nav-icon" onClick={() => setIsProfilePanelOpen(true)} aria-label="Open profile">
               <UserIcon className="stream-nav-svg" />
@@ -4249,6 +4268,12 @@ const BrowsePage = () => {
             </button>
           )}
         </nav>
+
+        <FriendsPanel
+          isOpen={isFriendsPanelOpen}
+          onClose={() => setIsFriendsPanelOpen(false)}
+          currentUser={authUser}
+        />
 
         {isSearchOpen && (
           <div className="stream-search-layer">
