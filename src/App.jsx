@@ -1516,10 +1516,17 @@ const ShareToFriendsModal = ({ movie, currentUser, onClose }) => {
       setIsLoading(true)
       const { data: reqs } = await supabase
         .from('friend_requests')
-        .select('sender_id, receiver_id, sender:profiles!sender_id(id,friend_tag), receiver:profiles!receiver_id(id,friend_tag)')
+        .select('id, sender_id, receiver_id, status')
         .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
         .eq('status', 'accepted')
-      setFriends((reqs || []).map(r => r.sender_id === currentUser.id ? r.receiver : r.sender).filter(Boolean))
+
+      const otherIds = (reqs || []).map(r => r.sender_id === currentUser.id ? r.receiver_id : r.sender_id)
+      if (otherIds.length > 0) {
+        const { data: profiles } = await supabase.from('profiles').select('id, friend_tag').in('id', otherIds)
+        setFriends(profiles || [])
+      } else {
+        setFriends([])
+      }
       setIsLoading(false)
     }
     load()
@@ -1528,16 +1535,21 @@ const ShareToFriendsModal = ({ movie, currentUser, onClose }) => {
   const handleShare = async () => {
     if (!selectedFriend || !movie) return
     setStatus('Sharing...')
-    const { error } = await supabase.from('shared_movies').insert({
+    const { error } = await supabase.from('messages').insert({
       sender_id: currentUser.id,
       receiver_id: selectedFriend.id,
-      movie_id: movie.id,
-      movie_title: movie.title || movie.name,
-      movie_poster_path: movie.poster_path || movie.backdrop_path || null,
-      media_type: movie.media_type || 'movie'
+      type: 'movie',
+      content: null,
+      movie_data: {
+        id: movie.id,
+        title: movie.title || movie.name,
+        poster_path: movie.poster_path || movie.backdrop_path || null,
+        media_type: movie.media_type || 'movie',
+        year: (movie.release_date || movie.first_air_date || '').slice(0, 4)
+      }
     })
     if (error) { setStatus('Failed to share. Try again.'); return }
-    setStatus(`Shared with ${selectedFriend.friend_tag}!`)
+    setStatus(`Shared with ${selectedFriend.friend_tag}! ✓`)
     setTimeout(onClose, 1400)
   }
 
@@ -4610,7 +4622,7 @@ const BrowsePage = () => {
       <div className={`streaming-home ${isHeroCollapsed ? 'is-browse-focused' : ''}`}>
         {!window.electron?.isDesktop && (
           <a
-            href="https://github.com/4myo/movie/releases/download/v1.1.1/Movieslo-Web-Setup-1.1.1.exe"
+            href="https://github.com/4myo/movie/releases/download/v1.3.3/Movieslo-Web-Setup-1.3.3.exe"
             className="download-app-badge"
             title="Download Movieslo for Windows"
           >
