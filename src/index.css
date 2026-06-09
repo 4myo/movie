@@ -4877,6 +4877,16 @@
 }
 .fc-send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* sidebar refresh button */
+.fc-sidebar-refresh { display: flex; justify-content: flex-end; padding: 0 0 6px 0; }
+.fc-refresh-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.45); cursor: pointer; transition: all 0.15s;
+}
+.fc-refresh-btn:hover { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.8); }
+
 /* outgoing pending row */
 .fc-outgoing-item { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); }
 .fc-pending-label {

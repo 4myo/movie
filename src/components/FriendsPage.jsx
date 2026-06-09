@@ -61,25 +61,29 @@ export default function FriendsPage({ currentUser }) {
 
   const loadFriends = useCallback(async () => {
     if (!currentUser) return
-    const { data: reqs } = await supabase
+
+    const { data: reqs, error: reqsErr } = await supabase
       .from('friend_requests')
       .select('id, sender_id, receiver_id, sender:profiles!sender_id(id,friend_tag), receiver:profiles!receiver_id(id,friend_tag)')
       .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
       .eq('status', 'accepted')
+    if (reqsErr) console.error('[Friends] accepted query error — check RLS policies:', reqsErr)
     setFriends((reqs || []).map(r => r.sender_id === currentUser.id ? r.receiver : r.sender).filter(Boolean))
 
-    const { data: inc } = await supabase
+    const { data: inc, error: incErr } = await supabase
       .from('friend_requests')
       .select('id, sender:profiles!sender_id(id,friend_tag)')
       .eq('receiver_id', currentUser.id)
       .eq('status', 'pending')
+    if (incErr) console.error('[Friends] incoming query error — check RLS policies:', incErr)
     setIncoming(inc || [])
 
-    const { data: out } = await supabase
+    const { data: out, error: outErr } = await supabase
       .from('friend_requests')
       .select('id, receiver:profiles!receiver_id(id,friend_tag)')
       .eq('sender_id', currentUser.id)
       .eq('status', 'pending')
+    if (outErr) console.error('[Friends] outgoing query error — check RLS policies:', outErr)
     setOutgoing(out || [])
   }, [currentUser])
 
@@ -338,6 +342,15 @@ export default function FriendsPage({ currentUser }) {
         {/* ── Left sidebar ── */}
         <div className="fc-sidebar">
           <div className="fc-sidebar-inner">
+
+            <div className="fc-sidebar-refresh">
+              <button className="fc-refresh-btn" onClick={() => { loadFriends(); loadUnreadCounts() }} title="Refresh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13">
+                  <path d="M1 4v6h6M23 20v-6h-6"/>
+                  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                </svg>
+              </button>
+            </div>
 
             {incoming.length > 0 && (
               <div className="fc-section">
