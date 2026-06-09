@@ -22,6 +22,7 @@ export default function FriendsPage({ currentUser }) {
   const [myProfile, setMyProfile] = useState(null)
   const [friends, setFriends] = useState([])
   const [incoming, setIncoming] = useState([])
+  const [outgoing, setOutgoing] = useState([])
   const [selectedFriend, setSelectedFriend] = useState(null)
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
@@ -73,6 +74,13 @@ export default function FriendsPage({ currentUser }) {
       .eq('receiver_id', currentUser.id)
       .eq('status', 'pending')
     setIncoming(inc || [])
+
+    const { data: out } = await supabase
+      .from('friend_requests')
+      .select('id, receiver:profiles!receiver_id(id,friend_tag)')
+      .eq('sender_id', currentUser.id)
+      .eq('status', 'pending')
+    setOutgoing(out || [])
   }, [currentUser])
 
   const loadMessages = useCallback(async (friendId) => {
@@ -251,6 +259,11 @@ export default function FriendsPage({ currentUser }) {
     loadFriends()
   }
 
+  async function cancelRequest(reqId) {
+    await supabase.from('friend_requests').delete().eq('id', reqId).eq('sender_id', currentUser.id)
+    loadFriends()
+  }
+
   async function findFriend() {
     const tag = searchTag.trim()
     if (!tag.includes('#')) { setSearchMsg('Format: username#1234'); return }
@@ -337,6 +350,22 @@ export default function FriendsPage({ currentUser }) {
                       <button className="fc-accept-btn" onClick={() => respondToRequest(req.id, true)} title="Accept">✓</button>
                       <button className="fc-reject-btn" onClick={() => respondToRequest(req.id, false)} title="Decline">✕</button>
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {outgoing.length > 0 && (
+              <div className="fc-section">
+                <div className="fc-section-label">Sent · {outgoing.length}</div>
+                {outgoing.map(req => (
+                  <div key={req.id} className="fc-request-item fc-outgoing-item">
+                    <div className="fc-avatar">{(req.receiver?.friend_tag || '?')[0].toUpperCase()}</div>
+                    <div className="fc-request-name">
+                      <span>{req.receiver?.friend_tag}</span>
+                      <span className="fc-pending-label">Pending…</span>
+                    </div>
+                    <button className="fc-reject-btn" onClick={() => cancelRequest(req.id)} title="Cancel request">✕</button>
                   </div>
                 ))}
               </div>

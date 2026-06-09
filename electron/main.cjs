@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, shell, ipcMain, protocol, net, Menu, session } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, protocol, net, Menu, session, Notification } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const ytdl = require('ytdl-core');
@@ -97,7 +97,19 @@ ipcMain.handle('get-trailer-url', async (_, videoId) => {
 
 autoUpdater.on('update-available', () => mainWindow?.webContents.send('update-available'));
 autoUpdater.on('download-progress', (p) => mainWindow?.webContents.send('update-progress', Math.round(p.percent)));
-autoUpdater.on('update-downloaded', () => mainWindow?.webContents.send('update-downloaded'));
+autoUpdater.on('update-downloaded', () => {
+  mainWindow?.webContents.send('update-downloaded');
+  // Native OS notification as guaranteed fallback
+  if (Notification.isSupported()) {
+    const n = new Notification({
+      title: 'Movieslo update ready',
+      body: 'A new version has been downloaded. Click to restart and install.',
+      silent: false,
+    });
+    n.on('click', () => autoUpdater.quitAndInstall(false, true));
+    n.show();
+  }
+});
 autoUpdater.on('error', (err) => mainWindow?.webContents.send('update-error', err?.message || 'Update failed'));
 ipcMain.on('install-update', () => autoUpdater.quitAndInstall(false, true));
 

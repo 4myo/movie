@@ -1833,6 +1833,19 @@ const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
   const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState(null)
   const [isServerMenuOpen, setIsServerMenuOpen] = useState(false)
   const [watchedSeconds, setWatchedSeconds] = useState(0)
+
+  // Watch party
+  const sessionId = useMemo(() => new URLSearchParams(watchLocation.search).get('session'), [watchLocation.search])
+  const [watchSession, setWatchSession] = useState(null)
+  const [sessionPartner, setSessionPartner] = useState(null)
+  const [sessionMessages, setSessionMessages] = useState([])
+  const [isPartyOpen, setIsPartyOpen] = useState(false)
+  const [partyMessage, setPartyMessage] = useState('')
+  const [isPartySending, setIsPartySending] = useState(false)
+  const [partyCountdown, setPartyCountdown] = useState(null)
+  const [partnerOnline, setPartnerOnline] = useState(false)
+  const partyMsgsEndRef = useRef(null)
+
   const watchStartedAtRef = useRef(Date.now())
   const latestProgressRef = useRef(null)
   const lastRemoteProgressSaveRef = useRef(0)
@@ -1842,6 +1855,114 @@ const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
     const params = new URLSearchParams(watchLocation.search)
     return getResumeTimeSeconds({ resume_time_seconds: params.get('t') || params.get('start') })
   }, [watchLocation.search])
+
+  // ── Watch party: load session + partner + recent messages ──
+  useEffect(() => {
+    if (!sessionId || !authUser?.id) return
+    let active = true
+
+    async function loadSession() {
+      const { data: sess } = await supabase
+        .from('watch_sessions')
+        .select('*, host:profiles!host_id(id,friend_tag), guest:profiles!guest_id(id,friend_tag)')
+        .eq('id', sessionId)
+        .single()
+      if (!sess || !active) return
+
+      setWatchSession(sess)
+      const isHost = sess.host_id === authUser.id
+      const partner = isHost ? sess.guest : sess.host
+      setSessionPartner(partner)
+      setIsPartyOpen(true)
+
+      // Mark join time
+      const joinField = isHost ? 'host_joined_at' : 'guest_joined_at'
+      if (!sess[joinField]) {
+        await supabase.from('watch_sessions').update({ [joinField]: new Date().toISOString(), status: 'active' }).eq('id', sessionId)
+      }
+
+      // If second person just joined and other already joined → fire countdown
+      const otherJoinField = isHost ? 'guest_joined_at' : 'host_joined_at'
+      if (sess[otherJoinField]) setPartnerOnline(true)
+
+      // Load recent messages with partner
+      if (partner?.id) {
+        const uid = authUser.id
+        const pid = partner.id
+        const { data: msgs } = await supabase
+          .from('messages')
+          .select('*')
+          .or(`and(sender_id.eq.${uid},receiver_id.eq.${pid}),and(sender_id.eq.${pid},receiver_id.eq.${uid})`)
+          .order('created_at', { ascending: false })
+          .limit(40)
+        if (active) setSessionMessages((msgs || []).reverse())
+      }
+    }
+
+    loadSession()
+    return () => { active = false }
+  }, [sessionId, authUser?.id])
+
+  // ── Watch party: real-time session state + chat ──
+  useEffect(() => {
+    if (!sessionId || !authUser?.id) return
+
+    const channel = supabase
+      .channel(`wp:${sessionId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'watch_sessions',
+        filter: `id=eq.${sessionId}`
+      }, payload => {
+        const s = payload.new
+        setWatchSession(s)
+        const isHost = s.host_id === authUser.id
+        const otherJoinField = isHost ? 'guest_joined_at' : 'host_joined_at'
+        if (s[otherJoinField] && !partnerOnline) {
+          setPartnerOnline(true)
+          // 3-2-1 countdown when partner joins
+          setPartyCountdown(3)
+          let n = 3
+          const t = setInterval(() => {
+            n -= 1
+            if (n <= 0) { clearInterval(t); setPartyCountdown(null) }
+            else setPartyCountdown(n)
+          }, 1000)
+        }
+      })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages'
+      }, payload => {
+        const msg = payload.new
+        if (msg.receiver_id === authUser.id || msg.sender_id === authUser.id) {
+          setSessionMessages(prev => [...prev, msg])
+        }
+      })
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [sessionId, authUser?.id, partnerOnline])
+
+  useEffect(() => {
+    partyMsgsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [sessionMessages])
+
+  async function sendPartyMessage(content) {
+    if (!content.trim() || !authUser?.id || !sessionPartner?.id) return
+    setIsPartySending(true)
+    const { data } = await supabase.from('messages').insert({
+      sender_id: authUser.id,
+      receiver_id: sessionPartner.id,
+      content: content.trim(),
+      type: 'text'
+    }).select().single()
+    if (data) setSessionMessages(prev => [...prev, data])
+    setPartyMessage('')
+    setIsPartySending(false)
+  }
 
   useEffect(() => {
     const loadWatchTitle = async () => {
@@ -2152,6 +2273,86 @@ const WatchRoute = ({ mediaType, id, authUser, onWatchProgress }) => {
             </div>
           )}
         </aside>
+
+        {/* ── Watch Party panel ── */}
+        {sessionId && sessionPartner && (
+          <>
+            {partyCountdown && (
+              <div className="wp-countdown">
+                <div className="wp-countdown-num">{partyCountdown}</div>
+                <p>Sync with {sessionPartner.friend_tag}</p>
+              </div>
+            )}
+
+            <button
+              className={`wp-toggle ${isPartyOpen ? 'is-open' : ''}`}
+              onClick={() => setIsPartyOpen(p => !p)}
+              title="Watch Party chat"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              <span>Watch Party</span>
+              {!isPartyOpen && sessionMessages.length > 0 && <span className="wp-badge" />}
+            </button>
+
+            {isPartyOpen && (
+              <div className="wp-panel">
+                <div className="wp-panel-header">
+                  <div className="wp-panel-title">
+                    <div className="wp-avatar-sm">{(sessionPartner.friend_tag || '?')[0].toUpperCase()}</div>
+                    <div>
+                      <span className="wp-partner-name">{sessionPartner.friend_tag}</span>
+                      <span className={`wp-status ${partnerOnline ? 'is-online' : ''}`}>
+                        {partnerOnline ? 'Watching' : 'Waiting to join…'}
+                      </span>
+                    </div>
+                  </div>
+                  <button className="wp-close" onClick={() => setIsPartyOpen(false)}>✕</button>
+                </div>
+
+                <div className="wp-messages">
+                  {sessionMessages.length === 0 && (
+                    <p className="wp-messages-empty">Start chatting while you watch!</p>
+                  )}
+                  {sessionMessages.map(msg => {
+                    const mine = msg.sender_id === authUser?.id
+                    return (
+                      <div key={msg.id} className={`wp-bubble ${mine ? 'is-mine' : ''}`}>
+                        {msg.type === 'text' && <span className="wp-bubble-text">{msg.content}</span>}
+                        {msg.type === 'movie' && msg.movie_data && (
+                          <span className="wp-bubble-text">🎬 {msg.movie_data.title}</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                  <div ref={partyMsgsEndRef} />
+                </div>
+
+                <div className="wp-input-row">
+                  <input
+                    className="wp-input"
+                    value={partyMessage}
+                    onChange={e => setPartyMessage(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); sendPartyMessage(partyMessage) } }}
+                    placeholder="React to the movie…"
+                    disabled={isPartySending}
+                  />
+                  <button
+                    className="wp-send"
+                    onClick={() => sendPartyMessage(partyMessage)}
+                    disabled={!partyMessage.trim() || isPartySending}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                      <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </AppShell>
   )
@@ -4374,8 +4575,28 @@ const BrowsePage = () => {
     )
   }
 
+  const UpdateReadyModal = updateState === 'ready' ? (
+    <div style={{ position:'fixed', inset:0, zIndex:9999, background:'rgba(0,0,0,0.72)', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(6px)' }}>
+      <div style={{ width:'100%', maxWidth:'360px', borderRadius:'20px', padding:'2rem', background:'linear-gradient(120deg,rgba(31,31,40,0.95) 0%,rgba(19,19,24,0.92) 55%,rgba(96,71,169,0.3) 100%)', border:'1px solid rgba(255,255,255,0.12)', boxShadow:'0 24px 60px rgba(0,0,0,0.6)', textAlign:'center' }}>
+        <div style={{ fontSize:'2.5rem', marginBottom:'0.75rem' }}>🔄</div>
+        <h2 style={{ color:'#fff', fontSize:'1.2rem', fontWeight:800, margin:'0 0 0.5rem' }}>Update Ready</h2>
+        <p style={{ color:'rgba(255,255,255,0.65)', fontSize:'0.9rem', margin:'0 0 1.5rem', lineHeight:1.5 }}>
+          A new version of Movieslo has been downloaded and is ready to install.
+        </p>
+        <div style={{ display:'flex', gap:'0.75rem', justifyContent:'center' }}>
+          <button type="button" onClick={() => window.electron.installUpdate()} style={{ flex:1, minHeight:'2.75rem', borderRadius:'999px', border:'none', background:'rgba(255,255,255,0.95)', color:'#111', fontWeight:800, fontSize:'0.9rem', cursor:'pointer' }}>
+            Restart &amp; Install
+          </button>
+          <button type="button" onClick={() => setUpdateState(null)} style={{ minHeight:'2.75rem', padding:'0 1.25rem', borderRadius:'999px', border:'1px solid rgba(255,255,255,0.14)', background:'rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.7)', fontWeight:700, fontSize:'0.9rem', cursor:'pointer' }}>
+            Later
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
+
   if (isFriendsPage) {
-    return <FriendsPage currentUser={authUser} />
+    return <>{UpdateReadyModal}<FriendsPage currentUser={authUser} /></>
   }
 
   return (
@@ -4932,33 +5153,7 @@ const BrowsePage = () => {
           </div>
         )}
 
-        {updateState === 'ready' && (
-          <div style={{ position:'fixed', inset:0, zIndex:9999, background:'rgba(0,0,0,0.72)', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(6px)' }}>
-            <div style={{ width:'100%', maxWidth:'360px', borderRadius:'20px', padding:'2rem', background:'linear-gradient(120deg,rgba(31,31,40,0.95) 0%,rgba(19,19,24,0.92) 55%,rgba(96,71,169,0.3) 100%)', border:'1px solid rgba(255,255,255,0.12)', boxShadow:'0 24px 60px rgba(0,0,0,0.6)', textAlign:'center' }}>
-              <div style={{ fontSize:'2.5rem', marginBottom:'0.75rem' }}>🔄</div>
-              <h2 style={{ color:'#fff', fontSize:'1.2rem', fontWeight:800, margin:'0 0 0.5rem' }}>Update Ready</h2>
-              <p style={{ color:'rgba(255,255,255,0.65)', fontSize:'0.9rem', margin:'0 0 1.5rem', lineHeight:1.5 }}>
-                A new version of Movieslo has been downloaded and is ready to install.
-              </p>
-              <div style={{ display:'flex', gap:'0.75rem', justifyContent:'center' }}>
-                <button
-                  type="button"
-                  onClick={() => window.electron.installUpdate()}
-                  style={{ flex:1, minHeight:'2.75rem', borderRadius:'999px', border:'none', background:'rgba(255,255,255,0.95)', color:'#111', fontWeight:800, fontSize:'0.9rem', cursor:'pointer' }}
-                >
-                  Restart &amp; Install
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUpdateState(null)}
-                  style={{ minHeight:'2.75rem', padding:'0 1.25rem', borderRadius:'999px', border:'1px solid rgba(255,255,255,0.14)', background:'rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.7)', fontWeight:700, fontSize:'0.9rem', cursor:'pointer' }}
-                >
-                  Later
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {UpdateReadyModal}
       </div>
 
       {activeDetailMediaType && activeDetailId && (
