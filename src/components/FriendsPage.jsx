@@ -5,6 +5,8 @@ import { supabase } from '../supabaseClient.js'
 const TMDB_KEY = import.meta.env.VITE_TMDB_API_KEY
 const TMDB_OPTS = { headers: { accept: 'application/json', Authorization: `Bearer ${TMDB_KEY}` } }
 
+const QUICK_EMOJIS = ['😂','❤️','👍','🔥','😍','🎬','🍿','👀','😭','🤣','💀','🙏','😊','👏','🎉','💯','😤','🥳','😅','✨']
+
 function buildTag(email) {
   const prefix = (email?.split('@')[0] || 'user').replace(/[^a-z0-9_]/gi, '').slice(0, 14) || 'user'
   return `${prefix}#${String(Math.floor(1000 + Math.random() * 9000))}`
@@ -41,9 +43,18 @@ export default function FriendsPage({ currentUser }) {
 
   const [unreadMap, setUnreadMap] = useState({})
   const [copied, setCopied] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [emojiBarOpen, setEmojiBarOpen] = useState(false)
+  const [nicknames, setNicknames] = useState({})
+  const [pinned, setPinned] = useState([])
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const [editingNick, setEditingNick] = useState(false)
+  const [nickInput, setNickInput] = useState('')
 
   const messagesEndRef = useRef(null)
   const movieDebounce = useRef(null)
+  const textInputRef = useRef(null)
+  const headerMenuRef = useRef(null)
   const selectedFriendRef = useRef(null)
   selectedFriendRef.current = selectedFriend
 
@@ -121,7 +132,11 @@ export default function FriendsPage({ currentUser }) {
 
     const unseen = (data || []).filter(m => m.receiver_id === currentUser.id && !m.seen_at)
     if (unseen.length > 0) {
-      await supabase.from('messages').update({ seen_at: new Date().toISOString() }).in('id', unseen.map(m => m.id))
+      const { error: seenErr } = await supabase
+        .from('messages').update({ seen_at: new Date().toISOString() }).in('id', unseen.map(m => m.id))
+      if (seenErr) console.error('[Messages] seen_at update failed — run messages RLS UPDATE policy:', seenErr)
+      setUnreadMap(prev => ({ ...prev, [friendId]: 0 }))
+    } else {
       setUnreadMap(prev => ({ ...prev, [friendId]: 0 }))
     }
   }, [currentUser])
@@ -144,6 +159,10 @@ export default function FriendsPage({ currentUser }) {
     loadProfile()
     loadFriends()
     loadUnreadCounts()
+    try {
+      setNicknames(JSON.parse(localStorage.getItem(`fc_nicks_${currentUser.id}`) || '{}'))
+      setPinned(JSON.parse(localStorage.getItem(`fc_pinned_${currentUser.id}`) || '[]'))
+    } catch {}
   }, [currentUser, loadProfile, loadFriends, loadUnreadCounts])
 
   useEffect(() => {
@@ -154,6 +173,15 @@ export default function FriendsPage({ currentUser }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (!headerMenuOpen) return
+    function handleOutside(e) {
+      if (!headerMenuRef.current?.contains(e.target)) setHeaderMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [headerMenuOpen])
 
   useEffect(() => {
     if (!currentUser) return
@@ -170,13 +198,21 @@ export default function FriendsPage({ currentUser }) {
         if (friend && msg.sender_id === friend.id) {
           setMessages(prev => [...prev, msg])
           supabase.from('messages').update({ seen_at: new Date().toISOString() }).eq('id', msg.id)
+          setUnreadMap(prev => ({ ...prev, [msg.sender_id]: 0 }))
         } else {
           setUnreadMap(prev => ({ ...prev, [msg.sender_id]: (prev[msg.sender_id] || 0) + 1 }))
         }
       })
+      // Clear badge when messages are marked seen (e.g. from another tab)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${currentUser.id}`
+      }, () => loadUnreadCounts())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [currentUser])
+  }, [currentUser, loadUnreadCounts])
 
   // Real-time: incoming friend requests + accepted requests
   useEffect(() => {
@@ -259,6 +295,9 @@ export default function FriendsPage({ currentUser }) {
       session_id: session.id,
       year: (movie.release_date || movie.first_air_date || '').slice(0, 4)
     })
+
+    // Sender also joins the session immediately
+    navigate(`/watch/${movie.media_type || 'movie'}/${movie.id}?session=${session.id}`)
   }
 
   async function joinWatchSession(movieData) {
@@ -277,6 +316,42 @@ export default function FriendsPage({ currentUser }) {
 
   async function cancelRequest(reqId) {
     await supabase.from('friend_requests').delete().eq('id', reqId).eq('sender_id', currentUser.id)
+    loadFriends()
+  }
+
+  function displayName(friend) {
+    return (friend && nicknames[friend.id]) || friend?.friend_tag || '?'
+  }
+
+  function togglePin(friendId) {
+    setPinned(prev => {
+      const next = prev.includes(friendId) ? prev.filter(id => id !== friendId) : [...prev, friendId]
+      localStorage.setItem(`fc_pinned_${currentUser.id}`, JSON.stringify(next))
+      return next
+    })
+    setHeaderMenuOpen(false)
+  }
+
+  function saveNickname() {
+    const nick = nickInput.trim()
+    setNicknames(prev => {
+      const next = { ...prev }
+      if (nick) next[selectedFriend.id] = nick
+      else delete next[selectedFriend.id]
+      localStorage.setItem(`fc_nicks_${currentUser.id}`, JSON.stringify(next))
+      return next
+    })
+    setEditingNick(false)
+  }
+
+  async function removeFriend() {
+    if (!selectedFriend) return
+    if (!window.confirm(`Remove ${displayName(selectedFriend)} from friends?`)) return
+    await supabase.from('friend_requests')
+      .delete()
+      .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${selectedFriend.id}),and(sender_id.eq.${selectedFriend.id},receiver_id.eq.${currentUser.id})`)
+    setSelectedFriend(null)
+    setHeaderMenuOpen(false)
     loadFriends()
   }
 
@@ -328,7 +403,11 @@ export default function FriendsPage({ currentUser }) {
     }, 350)
   }
 
-  const sortedFriends = [...friends].sort((a, b) => (unreadMap[b.id] || 0) - (unreadMap[a.id] || 0))
+  const sortedFriends = [...friends].sort((a, b) => {
+    const ap = pinned.includes(a.id), bp = pinned.includes(b.id)
+    if (ap !== bp) return ap ? -1 : 1
+    return (unreadMap[b.id] || 0) - (unreadMap[a.id] || 0)
+  })
 
   return (
     <div className="fc-page">
@@ -338,6 +417,11 @@ export default function FriendsPage({ currentUser }) {
             <path d="M19 12H5M12 5l-7 7 7 7"/>
           </svg>
           Back
+        </button>
+        <button className="fc-menu-toggle" onClick={() => setSidebarOpen(o => !o)} aria-label="Toggle sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
         </button>
         <span className="fc-topbar-title">Friends &amp; Chat</span>
         {myProfile && (
@@ -351,8 +435,13 @@ export default function FriendsPage({ currentUser }) {
       </div>
 
       <div className="fc-layout">
+        {/* Mobile overlay backdrop */}
+        {sidebarOpen && (
+          <div className="fc-sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+        )}
+
         {/* ── Left sidebar ── */}
-        <div className="fc-sidebar">
+        <div className={`fc-sidebar ${sidebarOpen ? 'is-open' : ''}`}>
           <div className="fc-sidebar-inner">
 
             <div className="fc-sidebar-refresh">
@@ -404,10 +493,13 @@ export default function FriendsPage({ currentUser }) {
                   <button
                     key={friend.id}
                     className={`fc-friend-item ${selectedFriend?.id === friend.id ? 'is-active' : ''}`}
-                    onClick={() => setSelectedFriend(friend)}
+                    onClick={() => { setSelectedFriend(friend); if (window.innerWidth < 640) setSidebarOpen(false) }}
                   >
                     <div className="fc-avatar">{(friend.friend_tag || '?')[0].toUpperCase()}</div>
-                    <span className="fc-friend-name">{friend.friend_tag}</span>
+                    <div className="fc-friend-name-wrap">
+                      <span className="fc-friend-name">{displayName(friend)}</span>
+                      {pinned.includes(friend.id) && <span className="fc-pin-icon">📌</span>}
+                    </div>
                     {(unreadMap[friend.id] || 0) > 0 && (
                       <span className="fc-unread">{unreadMap[friend.id]}</span>
                     )}
@@ -462,9 +554,55 @@ export default function FriendsPage({ currentUser }) {
           ) : (
             <>
               <div className="fc-chat-header">
+                <button className="fc-chat-back" onClick={() => setSidebarOpen(true)} title="Back to friends">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                    <path d="M19 12H5M12 5l-7 7 7 7"/>
+                  </svg>
+                </button>
                 <div className="fc-avatar fc-avatar-lg">{(selectedFriend.friend_tag || '?')[0].toUpperCase()}</div>
                 <div className="fc-chat-header-info">
-                  <span className="fc-chat-header-name">{selectedFriend.friend_tag}</span>
+                  {editingNick ? (
+                    <div className="fc-nick-edit-row">
+                      <input
+                        className="fc-nick-input"
+                        value={nickInput}
+                        onChange={e => setNickInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveNickname(); if (e.key === 'Escape') setEditingNick(false) }}
+                        placeholder={selectedFriend.friend_tag}
+                        autoFocus
+                      />
+                      <button className="fc-nick-save" onClick={saveNickname}>✓</button>
+                      <button className="fc-nick-cancel" onClick={() => setEditingNick(false)}>✕</button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="fc-chat-header-name">{displayName(selectedFriend)}</span>
+                      {nicknames[selectedFriend.id] && (
+                        <span className="fc-chat-header-tag">{selectedFriend.friend_tag}</span>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div className="fc-header-menu-wrap" ref={headerMenuRef}>
+                  <button
+                    className="fc-header-menu-btn"
+                    onClick={() => setHeaderMenuOpen(o => !o)}
+                    title="More options"
+                  >⋮</button>
+                  {headerMenuOpen && (
+                    <div className="fc-header-dropdown">
+                      <button onClick={() => { setNickInput(nicknames[selectedFriend.id] || ''); setEditingNick(true); setHeaderMenuOpen(false) }}>
+                        <span>✏️</span> Change nickname
+                      </button>
+                      <button onClick={() => togglePin(selectedFriend.id)}>
+                        <span>{pinned.includes(selectedFriend.id) ? '📌' : '📍'}</span>
+                        {pinned.includes(selectedFriend.id) ? 'Unpin' : 'Pin conversation'}
+                      </button>
+                      <button className="fc-dropdown-danger" onClick={removeFriend}>
+                        <span>🗑️</span> Remove friend
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -477,7 +615,7 @@ export default function FriendsPage({ currentUser }) {
 
               <div className="fc-messages">
                 {!dbMissing && messages.length === 0 && (
-                  <div className="fc-messages-empty">Say hi to {selectedFriend.friend_tag}!</div>
+                  <div className="fc-messages-empty">Say hi to {displayName(selectedFriend)}!</div>
                 )}
 
                 {messages.map(msg => {
@@ -601,10 +739,22 @@ export default function FriendsPage({ currentUser }) {
                 </div>
               )}
 
+              {emojiBarOpen && (
+                <div className="fc-emoji-bar">
+                  {QUICK_EMOJIS.map(e => (
+                    <button
+                      key={e}
+                      className="fc-emoji-btn"
+                      onClick={() => { setNewMessage(m => m + e); textInputRef.current?.focus() }}
+                    >{e}</button>
+                  ))}
+                </div>
+              )}
+
               <div className="fc-input-area">
                 <button
                   className={`fc-input-action ${isMoviePicker ? 'is-active' : ''}`}
-                  onClick={() => setIsMoviePicker(p => !p)}
+                  onClick={() => { setIsMoviePicker(p => !p); setEmojiBarOpen(false) }}
                   title="Share movie / Watch together"
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18">
@@ -612,7 +762,15 @@ export default function FriendsPage({ currentUser }) {
                     <path d="m10 8 6 4-6 4V8z" fill="currentColor" stroke="none"/>
                   </svg>
                 </button>
+                <button
+                  className={`fc-input-action ${emojiBarOpen ? 'is-active' : ''}`}
+                  onClick={() => { setEmojiBarOpen(p => !p); setIsMoviePicker(false) }}
+                  title="Emoji"
+                >
+                  😊
+                </button>
                 <input
+                  ref={textInputRef}
                   className="fc-text-input"
                   value={newMessage}
                   onChange={e => setNewMessage(e.target.value)}
@@ -622,7 +780,7 @@ export default function FriendsPage({ currentUser }) {
                       sendMessage(newMessage)
                     }
                   }}
-                  placeholder={`Message ${selectedFriend.friend_tag}…`}
+                  placeholder={`Message ${displayName(selectedFriend)}…`}
                   disabled={dbMissing}
                 />
                 <button

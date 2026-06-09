@@ -122,7 +122,9 @@
   }
 
   .download-app-badge {
-    @apply fixed top-4 left-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full no-underline;
+    @apply fixed z-50 flex items-center gap-2 px-3 py-2 rounded-full no-underline;
+    /* Desktop: top-left corner */
+    top: 1rem; left: 1rem;
     background: rgba(8, 8, 24, 0.72);
     border: 1px solid rgba(255, 255, 255, 0.14);
     backdrop-filter: blur(16px);
@@ -132,6 +134,15 @@
     letter-spacing: 0.03em;
     transition: background 0.18s, color 0.18s, border-color 0.18s;
     text-decoration: none;
+  }
+  /* On mobile: move to bottom-centre so it doesn't clash with the top navbar */
+  @media (max-width: 640px) {
+    .download-app-badge {
+      top: auto;
+      left: 50%;
+      bottom: 1.2rem;
+      transform: translateX(-50%);
+    }
   }
   .download-app-badge:hover {
     background: rgba(120, 80, 255, 0.28);
@@ -4535,8 +4546,62 @@
   background: linear-gradient(120deg,rgba(31,31,40,0.5) 0%,rgba(19,19,24,0.35) 100%);
   flex-shrink: 0;
 }
-.fc-chat-header-info { display: flex; flex-direction: column; }
-.fc-chat-header-name { font-size: 0.95rem; font-weight: 700; }
+.fc-chat-header-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.fc-chat-header-name { font-size: 0.95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-chat-header-tag  { font-size: 0.7rem; color: rgba(255,255,255,0.38); margin-top: 1px; }
+
+/* friend name wrap with pin */
+.fc-friend-name-wrap { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow: hidden; }
+.fc-pin-icon { font-size: 0.7rem; flex-shrink: 0; opacity: 0.7; }
+
+/* nickname edit row */
+.fc-nick-edit-row { display: flex; align-items: center; gap: 5px; }
+.fc-nick-input {
+  flex: 1; min-width: 0; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 7px; color: #fff; font-size: 0.88rem; padding: 4px 8px; outline: none;
+}
+.fc-nick-input:focus { border-color: rgba(139,92,246,0.6); }
+.fc-nick-save, .fc-nick-cancel {
+  background: none; border: none; cursor: pointer; font-size: 0.85rem;
+  padding: 3px 6px; border-radius: 5px; color: rgba(255,255,255,0.6);
+  transition: background 120ms, color 120ms;
+}
+.fc-nick-save:hover  { background: rgba(139,92,246,0.25); color: #fff; }
+.fc-nick-cancel:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+/* ⋮ header menu */
+.fc-header-menu-wrap { position: relative; flex-shrink: 0; }
+.fc-header-menu-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 8px;
+  background: none; border: 1px solid transparent;
+  color: rgba(255,255,255,0.5); font-size: 1.1rem; cursor: pointer;
+  transition: background 140ms, border-color 140ms, color 140ms;
+  letter-spacing: 0; line-height: 1;
+}
+.fc-header-menu-btn:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.1); color: #fff; }
+
+.fc-header-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  min-width: 188px;
+  background: linear-gradient(135deg,rgba(31,31,40,0.97) 0%,rgba(19,19,24,0.97) 100%);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+  overflow: hidden; z-index: 200;
+  animation: fc-drop-in 130ms ease;
+}
+@keyframes fc-drop-in { from { opacity:0; transform:translateY(-6px) scale(0.97) } to { opacity:1; transform:none } }
+.fc-header-dropdown button {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none; color: rgba(255,255,255,0.8);
+  font-size: 0.87rem; text-align: left; cursor: pointer;
+  transition: background 110ms;
+}
+.fc-header-dropdown button:hover { background: rgba(255,255,255,0.07); }
+.fc-header-dropdown button span { font-size: 1rem; }
+.fc-dropdown-danger { color: rgba(239,68,68,0.85) !important; }
+.fc-dropdown-danger:hover { background: rgba(239,68,68,0.10) !important; }
 
 .fc-db-notice {
   margin: 12px 20px 0;
@@ -4876,6 +4941,75 @@
   background: linear-gradient(120deg,rgba(96,71,169,0.92) 0%,rgba(139,92,246,1) 100%);
 }
 .fc-send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* menu toggle — hidden on desktop, shown on mobile */
+.fc-menu-toggle {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 8px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.7); cursor: pointer; flex-shrink: 0;
+}
+
+/* chat back arrow — hidden on desktop */
+.fc-chat-back {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.7); cursor: pointer; margin-right: 4px;
+}
+
+/* overlay backdrop — hidden by default */
+.fc-sidebar-overlay { display: none; }
+
+/* ── Mobile breakpoint ── */
+@media (max-width: 640px) {
+  .fc-menu-toggle { display: flex; }
+  .fc-chat-back   { display: flex; }
+  .fc-topbar-tag  { display: none; }
+
+  .fc-sidebar {
+    position: absolute;
+    left: 0; top: 56px; bottom: 0;
+    width: 82%;
+    max-width: 300px;
+    z-index: 60;
+    transform: translateX(-102%);
+    transition: transform 220ms cubic-bezier(0.25,0.46,0.45,0.94);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+  }
+  .fc-sidebar.is-open { transform: translateX(0); }
+
+  .fc-sidebar-overlay {
+    display: block;
+    position: absolute;
+    left: 0; top: 56px; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 59;
+    backdrop-filter: blur(2px);
+  }
+
+  .fc-chat-area { width: 100%; }
+}
+
+/* emoji bar */
+.fc-emoji-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px 12px;
+  background: linear-gradient(120deg,rgba(31,31,40,0.72) 0%,rgba(19,19,24,0.60) 100%);
+  border-top: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.fc-emoji-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.25rem; line-height: 1;
+  padding: 4px 5px; border-radius: 6px;
+  transition: background 120ms, transform 80ms;
+}
+.fc-emoji-btn:hover { background: rgba(255,255,255,0.10); transform: scale(1.18); }
 
 /* sidebar refresh button */
 .fc-sidebar-refresh { display: flex; justify-content: flex-end; padding: 0 0 6px 0; }
