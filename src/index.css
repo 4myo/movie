@@ -276,6 +276,8 @@
     @apply fixed inset-0 z-40 bg-black/55 px-4 pt-24 backdrop-blur-md;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .stream-search-panel {

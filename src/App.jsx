@@ -2596,6 +2596,12 @@ const BrowsePage = () => {
     window.electron.onUpdateError?.((msg) => { console.error('Update error:', msg); setUpdateState(null) })
   }, [])
 
+  // Lock body scroll while search overlay is open so only the overlay scrolls
+  useEffect(() => {
+    document.body.style.overflow = isSearchOpen ? 'hidden' : ''
+    return () => { document.body.style.overflow = '' }
+  }, [isSearchOpen])
+
   const recommendationItems = useMemo(() => buildRecommendations({
     movieList: deferredMovieList,
     trendingMovies: deferredTrendingMovies,

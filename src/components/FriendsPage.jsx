@@ -68,6 +68,8 @@ export default function FriendsPage({ currentUser }) {
       p = created
     }
     setMyProfile(p)
+    setNicknames(p?.contact_data?.nicknames || {})
+    setPinned(p?.contact_data?.pinned || [])
   }, [currentUser])
 
   const loadFriends = useCallback(async () => {
@@ -159,10 +161,6 @@ export default function FriendsPage({ currentUser }) {
     loadProfile()
     loadFriends()
     loadUnreadCounts()
-    try {
-      setNicknames(JSON.parse(localStorage.getItem(`fc_nicks_${currentUser.id}`) || '{}'))
-      setPinned(JSON.parse(localStorage.getItem(`fc_pinned_${currentUser.id}`) || '[]'))
-    } catch {}
   }, [currentUser, loadProfile, loadFriends, loadUnreadCounts])
 
   useEffect(() => {
@@ -323,10 +321,17 @@ export default function FriendsPage({ currentUser }) {
     return (friend && nicknames[friend.id]) || friend?.friend_tag || '?'
   }
 
+  async function persistContactData(newNicknames, newPinned) {
+    if (!currentUser) return
+    await supabase.from('profiles')
+      .update({ contact_data: { nicknames: newNicknames, pinned: newPinned } })
+      .eq('id', currentUser.id)
+  }
+
   function togglePin(friendId) {
     setPinned(prev => {
       const next = prev.includes(friendId) ? prev.filter(id => id !== friendId) : [...prev, friendId]
-      localStorage.setItem(`fc_pinned_${currentUser.id}`, JSON.stringify(next))
+      persistContactData(nicknames, next)
       return next
     })
     setHeaderMenuOpen(false)
@@ -338,7 +343,7 @@ export default function FriendsPage({ currentUser }) {
       const next = { ...prev }
       if (nick) next[selectedFriend.id] = nick
       else delete next[selectedFriend.id]
-      localStorage.setItem(`fc_nicks_${currentUser.id}`, JSON.stringify(next))
+      persistContactData(next, pinned)
       return next
     })
     setEditingNick(false)
