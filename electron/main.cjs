@@ -80,7 +80,9 @@ function createMain() {
 }
 
 autoUpdater.on('update-available', () => mainWindow?.webContents.send('update-available'));
+autoUpdater.on('download-progress', (p) => mainWindow?.webContents.send('update-progress', Math.round(p.percent)));
 autoUpdater.on('update-downloaded', () => mainWindow?.webContents.send('update-downloaded'));
+autoUpdater.on('error', (err) => mainWindow?.webContents.send('update-error', err?.message || 'Update failed'));
 ipcMain.on('install-update', () => autoUpdater.quitAndInstall(false, true));
 
 app.whenReady().then(() => {

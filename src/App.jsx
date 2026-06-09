@@ -2233,6 +2233,7 @@ const BrowsePage = () => {
     return window.localStorage.getItem(COOKIE_NOTICE_STORAGE_KEY) === 'accepted'
   })
   const [updateState, setUpdateState] = useState(null)
+  const [updateProgress, setUpdateProgress] = useState(0)
   const [shareModalMovie, setShareModalMovie] = useState(null)
   const [_isListTransitionPending, startListTransition] = useTransition()
   const moviesSectionRef = useRef(null)
@@ -2370,8 +2371,10 @@ const BrowsePage = () => {
 
   useEffect(() => {
     if (!window.electron?.isDesktop) return
-    window.electron.onUpdateAvailable(() => setUpdateState('available'))
-    window.electron.onUpdateDownloaded(() => setUpdateState('ready'))
+    window.electron.onUpdateAvailable(() => { setUpdateState('available'); setUpdateProgress(0) })
+    window.electron.onUpdateProgress?.((pct) => setUpdateProgress(pct))
+    window.electron.onUpdateDownloaded(() => { setUpdateState('ready'); setUpdateProgress(100) })
+    window.electron.onUpdateError?.((msg) => { console.error('Update error:', msg); setUpdateState(null) })
   }, [])
 
   const recommendationItems = useMemo(() => buildRecommendations({
@@ -4852,14 +4855,21 @@ const BrowsePage = () => {
 
         {updateState === 'available' && (
           <div className="cookie-notice" role="status" aria-label="Update notification">
-            <p>A new version is downloading in the background&hellip;</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minWidth: 0 }}>
+              <p style={{ margin: 0 }}>
+                Downloading update{updateProgress > 0 ? ` — ${updateProgress}%` : '…'}
+              </p>
+              <div style={{ height: '3px', borderRadius: '999px', background: 'rgba(255,255,255,0.12)', overflow: 'hidden', width: '100%' }}>
+                <div style={{ height: '100%', borderRadius: '999px', background: 'rgba(255,255,255,0.85)', width: `${updateProgress}%`, transition: 'width 400ms ease' }} />
+              </div>
+            </div>
             <button type="button" onClick={() => setUpdateState(null)}>Dismiss</button>
           </div>
         )}
 
         {updateState === 'ready' && (
           <div className="cookie-notice" role="status" aria-label="Update ready">
-            <p>Update ready. Restart Movieslo to apply it.</p>
+            <p>Update downloaded — restart to apply.</p>
             <button type="button" onClick={() => window.electron.installUpdate()}>Restart &amp; Install</button>
             <button type="button" onClick={() => setUpdateState(null)}>Later</button>
           </div>
