@@ -62,29 +62,41 @@ export default function FriendsPage({ currentUser }) {
   const loadFriends = useCallback(async () => {
     if (!currentUser) return
 
-    const { data: reqs, error: reqsErr } = await supabase
+    // Fetch all requests involving this user in one query (no join)
+    const { data: allReqs, error: reqsErr } = await supabase
       .from('friend_requests')
-      .select('id, sender_id, receiver_id, sender:profiles!sender_id(id,friend_tag), receiver:profiles!receiver_id(id,friend_tag)')
+      .select('id, sender_id, receiver_id, status')
       .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
-      .eq('status', 'accepted')
-    if (reqsErr) console.error('[Friends] accepted query error — check RLS policies:', reqsErr)
-    setFriends((reqs || []).map(r => r.sender_id === currentUser.id ? r.receiver : r.sender).filter(Boolean))
 
-    const { data: inc, error: incErr } = await supabase
-      .from('friend_requests')
-      .select('id, sender:profiles!sender_id(id,friend_tag)')
-      .eq('receiver_id', currentUser.id)
-      .eq('status', 'pending')
-    if (incErr) console.error('[Friends] incoming query error — check RLS policies:', incErr)
-    setIncoming(inc || [])
+    if (reqsErr) {
+      console.error('[Friends] friend_requests query failed — RLS SELECT policy likely missing:', reqsErr)
+      return
+    }
 
-    const { data: out, error: outErr } = await supabase
-      .from('friend_requests')
-      .select('id, receiver:profiles!receiver_id(id,friend_tag)')
-      .eq('sender_id', currentUser.id)
-      .eq('status', 'pending')
-    if (outErr) console.error('[Friends] outgoing query error — check RLS policies:', outErr)
-    setOutgoing(out || [])
+    const reqs = allReqs || []
+    const accepted = reqs.filter(r => r.status === 'accepted')
+    const inc      = reqs.filter(r => r.status === 'pending' && r.receiver_id === currentUser.id)
+    const out      = reqs.filter(r => r.status === 'pending' && r.sender_id   === currentUser.id)
+
+    // Collect profile IDs to look up
+    const otherIds = [...new Set([
+      ...accepted.map(r => r.sender_id === currentUser.id ? r.receiver_id : r.sender_id),
+      ...inc.map(r => r.sender_id),
+      ...out.map(r => r.receiver_id),
+    ])].filter(Boolean)
+
+    let profileMap = {}
+    if (otherIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from('profiles').select('id, friend_tag').in('id', otherIds)
+      ;(profiles || []).forEach(p => { profileMap[p.id] = p })
+    }
+
+    const fallback = id => profileMap[id] || { id, friend_tag: id.slice(0, 8) + '…' }
+
+    setFriends(accepted.map(r => fallback(r.sender_id === currentUser.id ? r.receiver_id : r.sender_id)))
+    setIncoming(inc.map(r => ({ id: r.id, sender: fallback(r.sender_id) })))
+    setOutgoing(out.map(r => ({ id: r.id, receiver: fallback(r.receiver_id) })))
   }, [currentUser])
 
   const loadMessages = useCallback(async (friendId) => {
