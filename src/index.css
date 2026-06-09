@@ -5023,6 +5023,62 @@
 }
 .fc-refresh-btn:hover { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.8); }
 
+/* avatar image variant */
+.fc-avatar-img {
+  width: 32px; height: 32px; border-radius: 50%;
+  object-fit: cover; flex-shrink: 0;
+  border: 1.5px solid rgba(255,255,255,0.12);
+}
+.fc-avatar-img.fc-avatar-lg { width: 40px; height: 40px; }
+
+/* ── Profile card at sidebar bottom ── */
+.fc-profile-card {
+  margin-top: auto;
+  padding: 10px 8px 4px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.fc-profile-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.fc-profile-avatar { cursor: pointer; transition: opacity 150ms; }
+.fc-profile-avatar:hover { opacity: 0.75; }
+.fc-profile-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fc-profile-tag {
+  font-size: 0.8rem; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: rgba(255,255,255,0.88);
+}
+.fc-profile-sub { font-size: 0.65rem; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em; }
+.fc-profile-edit-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.45); cursor: pointer; transition: all 0.15s;
+}
+.fc-profile-edit-btn:hover { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.8); }
+
+.fc-profile-edit {
+  display: flex; flex-direction: column; gap: 8px; padding-top: 4px;
+}
+.fc-profile-edit-avatar-wrap {
+  display: flex; align-items: center; gap: 10px;
+}
+.fc-profile-change-photo {
+  font-size: 0.72rem; font-weight: 600; color: rgba(139,92,246,0.85);
+  background: none; border: none; cursor: pointer; padding: 0;
+  transition: color 130ms;
+}
+.fc-profile-change-photo:hover { color: rgba(167,139,250,1); }
+.fc-profile-uploading { font-size: 0.72rem; color: rgba(255,255,255,0.4); }
+.fc-profile-tag-row { display: flex; align-items: center; gap: 6px; }
+.fc-profile-tag-row .fc-nick-input { flex: 1; }
+.fc-tag-status { font-size: 0.85rem; font-weight: 700; flex-shrink: 0; }
+.fc-tag-status.ok      { color: rgba(74,222,128,0.9); }
+.fc-tag-status.err     { color: rgba(239,68,68,0.9); }
+.fc-tag-status.checking { color: rgba(255,255,255,0.4); }
+.fc-profile-hint { font-size: 0.65rem; color: rgba(255,255,255,0.28); margin: 0; }
+.fc-profile-edit-btns { display: flex; gap: 6px; }
+
 /* outgoing pending row */
 .fc-outgoing-item { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); }
 .fc-pending-label {

@@ -12,6 +12,15 @@ function buildTag(email) {
   return `${prefix}#${String(Math.floor(1000 + Math.random() * 9000))}`
 }
 
+function FcAvatar({ profile, size = 'sm', onClick, className = '' }) {
+  const letter = (profile?.friend_tag || '?')[0].toUpperCase()
+  const cls = `fc-avatar${size === 'lg' ? ' fc-avatar-lg' : ''}${className ? ' ' + className : ''}`
+  if (profile?.avatar_url) {
+    return <img className={`${cls} fc-avatar-img`} src={profile.avatar_url} alt={letter} onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined} />
+  }
+  return <div className={cls} onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>{letter}</div>
+}
+
 function formatMsgTime(ts) {
   if (!ts) return ''
   const d = new Date(ts)
@@ -51,9 +60,19 @@ export default function FriendsPage({ currentUser }) {
   const [editingNick, setEditingNick] = useState(false)
   const [nickInput, setNickInput] = useState('')
 
+  const [isEditingProfile, setIsEditingProfile] = useState(false)
+  const [tagInput, setTagInput] = useState('')
+  const [tagAvailable, setTagAvailable] = useState(null)
+  const [isCheckingTag, setIsCheckingTag] = useState(false)
+  const [isSavingTag, setIsSavingTag] = useState(false)
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [profileMsg, setProfileMsg] = useState('')
+
   const messagesEndRef = useRef(null)
   const movieDebounce = useRef(null)
+  const tagDebounce = useRef(null)
   const textInputRef = useRef(null)
+  const avatarInputRef = useRef(null)
   const headerMenuRef = useRef(null)
   const selectedFriendRef = useRef(null)
   selectedFriendRef.current = selectedFriend
@@ -101,7 +120,7 @@ export default function FriendsPage({ currentUser }) {
     let profileMap = {}
     if (otherIds.length > 0) {
       const { data: profiles } = await supabase
-        .from('profiles').select('id, friend_tag').in('id', otherIds)
+        .from('profiles').select('id, friend_tag, avatar_url').in('id', otherIds)
       ;(profiles || []).forEach(p => { profileMap[p.id] = p })
     }
 
@@ -328,6 +347,53 @@ export default function FriendsPage({ currentUser }) {
       .eq('id', currentUser.id)
   }
 
+  function onTagInputChange(val) {
+    setTagInput(val)
+    setTagAvailable(null)
+    clearTimeout(tagDebounce.current)
+    const trimmed = val.trim()
+    if (!trimmed || trimmed === myProfile?.friend_tag) return
+    if (!/^[a-zA-Z0-9_]{2,14}#\d{4}$/.test(trimmed)) return
+    tagDebounce.current = setTimeout(async () => {
+      setIsCheckingTag(true)
+      const { data } = await supabase.from('profiles').select('id').eq('friend_tag', trimmed).neq('id', currentUser.id).maybeSingle()
+      setTagAvailable(!data)
+      setIsCheckingTag(false)
+    }, 500)
+  }
+
+  async function saveTag() {
+    const tag = tagInput.trim()
+    if (!tag || tag === myProfile?.friend_tag) { setIsEditingProfile(false); return }
+    if (!/^[a-zA-Z0-9_]{2,14}#\d{4}$/.test(tag)) { setProfileMsg('Format: username#1234 (2–14 chars)'); return }
+    if (tagAvailable === false) { setProfileMsg('Tag already taken'); return }
+    setIsSavingTag(true)
+    const { error } = await supabase.from('profiles').update({ friend_tag: tag }).eq('id', currentUser.id)
+    if (error) { setProfileMsg('Failed to save'); setIsSavingTag(false); return }
+    setMyProfile(p => ({ ...p, friend_tag: tag }))
+    setProfileMsg('Tag updated! ✓')
+    setIsSavingTag(false)
+    setTimeout(() => { setProfileMsg(''); setIsEditingProfile(false) }, 1500)
+  }
+
+  async function uploadAvatar(file) {
+    if (!file || !currentUser) return
+    const ext = file.name.split('.').pop().toLowerCase()
+    if (!['jpg','jpeg','png','webp','gif'].includes(ext)) { setProfileMsg('Only jpg/png/webp/gif allowed'); return }
+    setIsUploadingAvatar(true)
+    setProfileMsg('')
+    const path = `${currentUser.id}.${ext}`
+    const { error: upErr } = await supabase.storage.from('avatars').upload(path, file, { upsert: true, contentType: file.type })
+    if (upErr) { setProfileMsg('Upload failed: ' + upErr.message); setIsUploadingAvatar(false); return }
+    const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(path)
+    const avatarUrl = urlData.publicUrl + '?t=' + Date.now()
+    await supabase.from('profiles').update({ avatar_url: avatarUrl }).eq('id', currentUser.id)
+    setMyProfile(p => ({ ...p, avatar_url: avatarUrl }))
+    setProfileMsg('Avatar updated! ✓')
+    setIsUploadingAvatar(false)
+    setTimeout(() => setProfileMsg(''), 2000)
+  }
+
   function togglePin(friendId) {
     setPinned(prev => {
       const next = prev.includes(friendId) ? prev.filter(id => id !== friendId) : [...prev, friendId]
@@ -500,7 +566,7 @@ export default function FriendsPage({ currentUser }) {
                     className={`fc-friend-item ${selectedFriend?.id === friend.id ? 'is-active' : ''}`}
                     onClick={() => { setSelectedFriend(friend); if (window.innerWidth < 640) setSidebarOpen(false) }}
                   >
-                    <div className="fc-avatar">{(friend.friend_tag || '?')[0].toUpperCase()}</div>
+                    <FcAvatar profile={friend} />
                     <div className="fc-friend-name-wrap">
                       <span className="fc-friend-name">{displayName(friend)}</span>
                       {pinned.includes(friend.id) && <span className="fc-pin-icon">📌</span>}
@@ -545,6 +611,66 @@ export default function FriendsPage({ currentUser }) {
               )}
             </div>
 
+            {/* ── My Profile Card ── */}
+            {myProfile && (
+              <div className="fc-profile-card">
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={e => e.target.files?.[0] && uploadAvatar(e.target.files[0])}
+                />
+
+                {!isEditingProfile ? (
+                  <div className="fc-profile-row">
+                    <FcAvatar profile={myProfile} size="lg" onClick={() => avatarInputRef.current?.click()} className="fc-profile-avatar" />
+                    <div className="fc-profile-info">
+                      <span className="fc-profile-tag">{myProfile.friend_tag}</span>
+                      <span className="fc-profile-sub">Your tag</span>
+                    </div>
+                    <button className="fc-topbar-copy" onClick={copyTag} title="Copy tag">{copied ? '✓' : '⧉'}</button>
+                    <button className="fc-profile-edit-btn" onClick={() => { setTagInput(myProfile.friend_tag); setTagAvailable(null); setProfileMsg(''); setIsEditingProfile(true) }} title="Edit profile">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="fc-profile-edit">
+                    <div className="fc-profile-edit-avatar-wrap">
+                      <FcAvatar profile={myProfile} size="lg" onClick={() => avatarInputRef.current?.click()} className="fc-profile-avatar" />
+                      {isUploadingAvatar
+                        ? <span className="fc-profile-uploading">Uploading…</span>
+                        : <button className="fc-profile-change-photo" onClick={() => avatarInputRef.current?.click()}>Change photo</button>
+                      }
+                    </div>
+                    <div className="fc-profile-tag-row">
+                      <input
+                        className="fc-nick-input"
+                        value={tagInput}
+                        onChange={e => onTagInputChange(e.target.value)}
+                        placeholder="username#1234"
+                        maxLength={19}
+                      />
+                      {isCheckingTag && <span className="fc-tag-status checking">…</span>}
+                      {!isCheckingTag && tagAvailable === true && <span className="fc-tag-status ok">✓</span>}
+                      {!isCheckingTag && tagAvailable === false && <span className="fc-tag-status err">✗</span>}
+                    </div>
+                    <p className="fc-profile-hint">Format: username#1234 · 2–14 chars</p>
+                    {profileMsg && <p className={`fc-msg ${profileMsg.includes('✓') ? 'fc-msg-ok' : 'fc-msg-err'}`}>{profileMsg}</p>}
+                    <div className="fc-profile-edit-btns">
+                      <button className="fc-add-confirm" onClick={saveTag} disabled={isSavingTag || tagAvailable === false}>
+                        {isSavingTag ? '…' : 'Save'}
+                      </button>
+                      <button className="fc-reject-btn" style={{ padding: '5px 12px' }} onClick={() => { setIsEditingProfile(false); setProfileMsg('') }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
           </div>
         </div>
 
@@ -564,7 +690,7 @@ export default function FriendsPage({ currentUser }) {
                     <path d="M19 12H5M12 5l-7 7 7 7"/>
                   </svg>
                 </button>
-                <div className="fc-avatar fc-avatar-lg">{(selectedFriend.friend_tag || '?')[0].toUpperCase()}</div>
+                <FcAvatar profile={selectedFriend} size="lg" />
                 <div className="fc-chat-header-info">
                   {editingNick ? (
                     <div className="fc-nick-edit-row">
