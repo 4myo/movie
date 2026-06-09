@@ -2,6 +2,7 @@
 const { app, BrowserWindow, shell, ipcMain, protocol, net, Menu, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
+const ytdl = require('ytdl-core');
 
 // Must be before app.whenReady() — lets iframes (YouTube) autoplay with audio
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -24,7 +25,11 @@ function tryReveal() {
   if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
   mainWindow.show();
   mainWindow.focus();
-  if (!isDev) setTimeout(() => autoUpdater.checkForUpdatesAndNotify(), 4000);
+  if (!isDev) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    setTimeout(() => autoUpdater.checkForUpdates(), 4000);
+  }
 }
 
 function createSplash() {
@@ -78,6 +83,17 @@ function createMain() {
   mainWindow.once('ready-to-show', () => { mainReady = true; tryReveal(); });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
+
+ipcMain.handle('get-trailer-url', async (_, videoId) => {
+  try {
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`)
+    const format = ytdl.chooseFormat(info.formats, { quality: 'highestvideo', filter: 'audioandvideo' })
+    return { url: format?.url || null }
+  } catch (err) {
+    console.error('[ytdl] get-trailer-url error:', err?.message)
+    return { url: null }
+  }
+})
 
 autoUpdater.on('update-available', () => mainWindow?.webContents.send('update-available'));
 autoUpdater.on('download-progress', (p) => mainWindow?.webContents.send('update-progress', Math.round(p.percent)));

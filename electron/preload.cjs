@@ -8,5 +8,6 @@ contextBridge.exposeInMainWorld('electron', {
   onUpdateProgress:   (cb) => { ipcRenderer.removeAllListeners('update-progress');   ipcRenderer.on('update-progress',   (_e, pct) => cb(pct)) },
   onUpdateDownloaded: (cb) => { ipcRenderer.removeAllListeners('update-downloaded'); ipcRenderer.on('update-downloaded', () => cb()) },
   onUpdateError:      (cb) => { ipcRenderer.removeAllListeners('update-error');      ipcRenderer.on('update-error',      (_e, msg) => cb(msg)) },
-  installUpdate: () => ipcRenderer.send('install-update')
+  installUpdate: () => ipcRenderer.send('install-update'),
+  getTrailerUrl: (videoId) => ipcRenderer.invoke('get-trailer-url', videoId)
 });

@@ -1,7 +1,7 @@
 {
   "name": "movieslo",
   "private": true,
-  "version": "1.1.5",
+  "version": "1.2.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -21,7 +21,8 @@
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.14.1",
     "tailwindcss": "^4.1.18",
-    "use-debounce": "^10.0.6"
+    "use-debounce": "^10.0.6",
+    "ytdl-core": "^4.11.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

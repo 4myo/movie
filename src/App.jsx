@@ -19,6 +19,7 @@ import {
   VideoCameraIcon
 } from './components/Icons.jsx'
 import { FriendsPanel } from './components/FriendsPanel.jsx'
+import FriendsPage from './components/FriendsPage.jsx'
 import { supabase } from './supabaseClient.js'
 import {
   DEFAULT_STREAMING_PROVIDER_ID,
@@ -367,15 +368,16 @@ const getHeroTrailerEmbedUrl = (videoKey) => {
   if (!videoKey) return ''
   const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop
   if (isDesktop) {
-    // enablejsapi=1 without origin= param: avoids Error 153 (bad app:// origin) while
-    // still giving us postMessage control. The autoplay-policy switch in main.cjs
-    // lets Chromium play unmuted. Controls are shown so users can interact directly.
-    return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&iv_load_policy=3`
+    // No enablejsapi=1 on desktop — Electron's app:// parent origin fails YouTube's
+    // client-side IFrame API origin check regardless of HTTP header spoofing → Error 153.
+    // Native YouTube controls handle volume; autoplay-policy Chromium switch handles unmuted play.
+    return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`
   }
-  const originParam = typeof window !== 'undefined'
-    ? `&origin=${encodeURIComponent(window.location.origin)}`
-    : ''
-  return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&controls=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3${originParam}`
+  // Web: mute=1 satisfies browser autoplay policy; we unmute via postMessage once player is ready.
+  // origin must NOT be URI-encoded — encodeURIComponent breaks YouTube's origin validation → Error 153.
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const originParam = origin ? `&origin=${origin}` : ''
+  return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3${originParam}`
 }
 
 const shouldPersistCacheKey = (key) => PERSISTENT_CACHE_KEYS.some((prefix) => key.startsWith(prefix))
@@ -2161,6 +2163,7 @@ const BrowsePage = () => {
   const detailMatch = location.pathname.match(/^\/title\/(movie|tv)\/(\d+)$/)
   const watchMatch = location.pathname.match(/^\/watch\/(movie|tv)\/(\d+)$/)
   const authMatch = location.pathname.match(/^\/account\/(login|signup)$/)
+  const isFriendsPage = location.pathname === '/friends'
   const legalDocumentType = location.pathname === TERMS_PATH
     ? 'terms'
     : location.pathname === PRIVACY_PATH
@@ -2185,6 +2188,7 @@ const BrowsePage = () => {
   const [exhaustedBeltKeys, setExhaustedBeltKeys] = useState([])
   const [heroTitle, setHeroTitle] = useState(null)
   const [heroTrailerUrl, setHeroTrailerUrl] = useState('')
+  const [heroTrailerVideoUrl, setHeroTrailerVideoUrl] = useState('')
   const [heroIndex, setHeroIndex] = useState(0)
   const [heroQueueMode, setHeroQueueMode] = useState('trending')
   const [isHeroCollapsed, setIsHeroCollapsed] = useState(false)
@@ -2243,6 +2247,7 @@ const BrowsePage = () => {
   const favoritesRowRef = useRef(null)
   const _recentlyWatchedRowRef = useRef(null)
   const heroVideoRef = useRef(null)
+  const trailerUrlCacheRef = useRef(new Map())
   const tasteProfileRef = useRef(DEFAULT_TASTE_PROFILE)
   const tasteProfileSyncTimeoutRef = useRef(null)
   const skipNextTitleFetchRef = useRef(false)
@@ -2309,11 +2314,24 @@ const BrowsePage = () => {
 
   const syncHeroAudio = useCallback(() => {
     if (!heroTrailerUrl || !heroVideoRef.current) return
-
     sendHeroVideoCommand('setVolume', [Math.round(heroVolume * 100)])
     sendHeroVideoCommand(isHeroMuted || heroVolume <= 0 ? 'mute' : 'unMute')
     sendHeroVideoCommand('playVideo')
   }, [heroTrailerUrl, heroVolume, isHeroMuted, sendHeroVideoCommand])
+
+  // Listen for YouTube player's onReady postMessage — fires when the player JS
+  // has initialised and is ready to accept commands (mute/volume/play).
+  useEffect(() => {
+    if (window.electron?.isDesktop) return
+    const handle = (e) => {
+      try {
+        const d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
+        if (d?.event === 'onReady') syncHeroAudio()
+      } catch {}
+    }
+    window.addEventListener('message', handle)
+    return () => window.removeEventListener('message', handle)
+  }, [syncHeroAudio])
 
   const toggleHeroAudio = () => {
     setIsHeroMuted((currentlyMuted) => {
@@ -3895,12 +3913,33 @@ const BrowsePage = () => {
         const video = getBestHeroVideo(data.results || [])
 
         if (isActive) {
-          setHeroTrailerUrl(getHeroTrailerEmbedUrl(video?.key))
+          if (window.electron?.isDesktop) {
+            setHeroTrailerUrl('')
+            if (video?.key) {
+              const cached = trailerUrlCacheRef.current.get(video.key)
+              if (cached) {
+                setHeroTrailerVideoUrl(cached)
+              } else {
+                setHeroTrailerVideoUrl('')
+                const result = await window.electron.getTrailerUrl(video.key)
+                if (isActive && result?.url) {
+                  trailerUrlCacheRef.current.set(video.key, result.url)
+                  setHeroTrailerVideoUrl(result.url)
+                }
+              }
+            } else {
+              setHeroTrailerVideoUrl('')
+            }
+          } else {
+            setHeroTrailerVideoUrl('')
+            setHeroTrailerUrl(getHeroTrailerEmbedUrl(video?.key))
+          }
         }
       } catch (error) {
         console.log(`Error fetching hero trailer: ${error}`)
         if (isActive) {
           setHeroTrailerUrl('')
+          setHeroTrailerVideoUrl('')
         }
       }
     }
@@ -3923,6 +3962,15 @@ const BrowsePage = () => {
       syncTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId))
     }
   }, [heroTrailerUrl, isHeroCollapsed, syncHeroAudio])
+
+  // Sync volume/muted to native <video> element on desktop
+  useEffect(() => {
+    if (!window.electron?.isDesktop || !heroTrailerVideoUrl) return
+    const el = heroVideoRef.current
+    if (!el || el.tagName !== 'VIDEO') return
+    el.muted = isHeroMuted
+    el.volume = isHeroMuted ? 0 : heroVolume
+  }, [heroVolume, isHeroMuted, heroTrailerVideoUrl])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -4326,6 +4374,10 @@ const BrowsePage = () => {
     )
   }
 
+  if (isFriendsPage) {
+    return <FriendsPage currentUser={authUser} />
+  }
+
   return (
     <AppShell>
       <div className={`streaming-home ${isHeroCollapsed ? 'is-browse-focused' : ''}`}>
@@ -4406,10 +4458,9 @@ const BrowsePage = () => {
           {isAuthenticated && (
             <button
               type="button"
-              className={`stream-nav-icon ${isFriendsPanelOpen ? 'is-active-soft' : ''}`}
-              onClick={() => setIsFriendsPanelOpen(open => !open)}
+              className={`stream-nav-icon ${isFriendsPage ? 'is-active' : ''}`}
+              onClick={() => navigate('/friends')}
               aria-label="Friends"
-              aria-expanded={isFriendsPanelOpen}
             >
               <UsersIcon className="stream-nav-svg" />
               <span className="stream-nav-label">Friends</span>
@@ -4566,15 +4617,29 @@ const BrowsePage = () => {
             {heroTrailerUrl && !isHeroCollapsed && (
               <iframe
                 ref={heroVideoRef}
-                className={`stream-hero-video${window.electron?.isDesktop ? ' stream-hero-video-desktop' : ''}`}
+                className="stream-hero-video"
                 src={heroTrailerUrl}
                 title={`${heroTitle?.title || 'Featured'} trailer`}
                 loading="eager"
                 fetchPriority="high"
                 referrerPolicy="strict-origin-when-cross-origin"
                 allow="autoplay *; encrypted-media *; picture-in-picture *; fullscreen *"
-                onLoad={syncHeroAudio}
+                onLoad={() => setTimeout(syncHeroAudio, 1200)}
                 allowFullScreen
+              />
+            )}
+            {window.electron?.isDesktop && heroTrailerVideoUrl && !isHeroCollapsed && (
+              <video
+                ref={heroVideoRef}
+                className="stream-hero-video"
+                src={heroTrailerVideoUrl}
+                autoPlay
+                loop
+                playsInline
+                onLoadedData={e => {
+                  e.target.muted = isHeroMuted
+                  e.target.volume = isHeroMuted ? 0 : heroVolume
+                }}
               />
             )}
           </div>
@@ -4640,7 +4705,7 @@ const BrowsePage = () => {
               <button type="button" className="stream-action-secondary" onClick={() => heroTitle && openTitleDetails(heroTitle)}>
                 ● Info
               </button>
-              <div className="stream-hero-volume" aria-label="Featured trailer volume">
+              {!window.electron?.isDesktop && <div className="stream-hero-volume" aria-label="Featured trailer volume">
                 <button
                   type="button"
                   className={`stream-hero-volume-button ${isHeroMuted || heroVolume <= 0 ? 'is-muted' : ''}`}
@@ -4663,7 +4728,7 @@ const BrowsePage = () => {
                   onChange={changeHeroVolume}
                   aria-label="Featured trailer volume"
                 />
-              </div>
+              </div>}
             </div>
           </div>
 
@@ -4868,10 +4933,30 @@ const BrowsePage = () => {
         )}
 
         {updateState === 'ready' && (
-          <div className="cookie-notice" role="status" aria-label="Update ready">
-            <p>Update downloaded — restart to apply.</p>
-            <button type="button" onClick={() => window.electron.installUpdate()}>Restart &amp; Install</button>
-            <button type="button" onClick={() => setUpdateState(null)}>Later</button>
+          <div style={{ position:'fixed', inset:0, zIndex:9999, background:'rgba(0,0,0,0.72)', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(6px)' }}>
+            <div style={{ width:'100%', maxWidth:'360px', borderRadius:'20px', padding:'2rem', background:'linear-gradient(120deg,rgba(31,31,40,0.95) 0%,rgba(19,19,24,0.92) 55%,rgba(96,71,169,0.3) 100%)', border:'1px solid rgba(255,255,255,0.12)', boxShadow:'0 24px 60px rgba(0,0,0,0.6)', textAlign:'center' }}>
+              <div style={{ fontSize:'2.5rem', marginBottom:'0.75rem' }}>🔄</div>
+              <h2 style={{ color:'#fff', fontSize:'1.2rem', fontWeight:800, margin:'0 0 0.5rem' }}>Update Ready</h2>
+              <p style={{ color:'rgba(255,255,255,0.65)', fontSize:'0.9rem', margin:'0 0 1.5rem', lineHeight:1.5 }}>
+                A new version of Movieslo has been downloaded and is ready to install.
+              </p>
+              <div style={{ display:'flex', gap:'0.75rem', justifyContent:'center' }}>
+                <button
+                  type="button"
+                  onClick={() => window.electron.installUpdate()}
+                  style={{ flex:1, minHeight:'2.75rem', borderRadius:'999px', border:'none', background:'rgba(255,255,255,0.95)', color:'#111', fontWeight:800, fontSize:'0.9rem', cursor:'pointer' }}
+                >
+                  Restart &amp; Install
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUpdateState(null)}
+                  style={{ minHeight:'2.75rem', padding:'0 1.25rem', borderRadius:'999px', border:'1px solid rgba(255,255,255,0.14)', background:'rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.7)', fontWeight:700, fontSize:'0.9rem', cursor:'pointer' }}
+                >
+                  Later
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
