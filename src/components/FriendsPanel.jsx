@@ -25,7 +25,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
   const [searchMsg, setSearchMsg] = useState('')
   const [isFinding, setIsFinding] = useState(false)
 
-  const [shareTarget, setShareTarget] = useState(null) // friend profile to share to
+  const [shareTarget, setShareTarget] = useState(null)
   const [movieQuery, setMovieQuery] = useState('')
   const [movieResults, setMovieResults] = useState([])
   const [isMovieSearching, setIsMovieSearching] = useState(false)
@@ -38,39 +38,40 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
   const load = useCallback(async () => {
     if (!currentUser) return
 
-    // ensure profile exists
     let { data: p } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single()
     if (!p) {
       const tag = buildTag(currentUser.email)
-      const { data: created } = await supabase.from('profiles').insert({ id: currentUser.id, friend_tag: tag }).select().single()
+      const { data: created, error: createErr } = await supabase
+        .from('profiles').insert({ id: currentUser.id, friend_tag: tag }).select().single()
+      if (createErr) { console.error('Profile create error:', createErr); return }
       p = created
     }
     setProfile(p)
 
-    // accepted friends
-    const { data: reqs } = await supabase
+    const { data: reqs, error: reqsErr } = await supabase
       .from('friend_requests')
       .select('id, sender_id, receiver_id, sender:profiles!sender_id(id,friend_tag), receiver:profiles!receiver_id(id,friend_tag)')
       .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
       .eq('status', 'accepted')
+    if (reqsErr) console.error('Friends load error:', reqsErr)
     setFriends((reqs || []).map(r => r.sender_id === currentUser.id ? r.receiver : r.sender).filter(Boolean))
 
-    // pending incoming
-    const { data: inc } = await supabase
+    const { data: inc, error: incErr } = await supabase
       .from('friend_requests')
       .select('id, sender:profiles!sender_id(id,friend_tag)')
       .eq('receiver_id', currentUser.id)
       .eq('status', 'pending')
+    if (incErr) console.error('Incoming requests error:', incErr)
     setIncoming(inc || [])
 
-    // received movies not yet seen
-    const { data: shrd } = await supabase
+    const { data: shrd, error: shrdErr } = await supabase
       .from('shared_movies')
       .select('id, movie_id, movie_title, movie_poster_path, media_type, created_at, sender:profiles!sender_id(friend_tag)')
       .eq('receiver_id', currentUser.id)
       .is('seen_at', null)
       .order('created_at', { ascending: false })
       .limit(8)
+    if (shrdErr) console.error('Shared movies error:', shrdErr)
     setReceived(shrd || [])
   }, [currentUser])
 
@@ -78,7 +79,6 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
     if (isOpen && currentUser) load()
   }, [isOpen, currentUser, load])
 
-  // close on outside click
   useEffect(() => {
     if (!isOpen) return
     const handler = (e) => { if (panelRef.current && !panelRef.current.contains(e.target)) onClose() }
@@ -90,20 +90,35 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
     const tag = searchTag.trim()
     if (!tag.includes('#')) { setSearchMsg('Format: username#1234'); return }
     setIsFinding(true); setSearchMsg(''); setSearchResult(null)
-    const { data } = await supabase.from('profiles').select('id,friend_tag').eq('friend_tag', tag).neq('id', currentUser.id).single()
+    const { data, error } = await supabase
+      .from('profiles').select('id,friend_tag').eq('friend_tag', tag).neq('id', currentUser.id).single()
     setIsFinding(false)
-    if (!data) { setSearchMsg('No user found'); return }
+    if (error || !data) { setSearchMsg('No user found with that tag'); return }
     setSearchResult(data)
   }
 
   async function sendRequest(toId) {
-    const { error } = await supabase.from('friend_requests').insert({ sender_id: currentUser.id, receiver_id: toId })
-    if (error?.code === '23505') setSearchMsg('Request already sent')
-    else { setSearchMsg('Request sent!'); setSearchTag(''); setSearchResult(null) }
+    setSearchMsg('Sending…')
+    const { error } = await supabase
+      .from('friend_requests')
+      .insert({ sender_id: currentUser.id, receiver_id: toId, status: 'pending' })
+    if (error) {
+      console.error('Send request error:', error)
+      if (error.code === '23505') setSearchMsg('Request already sent or you are already friends')
+      else setSearchMsg(`Error: ${error.message}`)
+    } else {
+      setSearchMsg('Request sent! They will see it when they open Friends.')
+      setSearchTag('')
+      setSearchResult(null)
+    }
   }
 
   async function respond(reqId, accept) {
-    await supabase.from('friend_requests').update({ status: accept ? 'accepted' : 'rejected' }).eq('id', reqId)
+    const { error } = await supabase
+      .from('friend_requests')
+      .update({ status: accept ? 'accepted' : 'rejected' })
+      .eq('id', reqId)
+    if (error) { console.error('Respond to request error:', error); return }
     load()
   }
 
@@ -128,7 +143,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
 
   async function shareMovie(movie) {
     if (!shareTarget) return
-    setShareMsg('')
+    setShareMsg('Sharing…')
     const { error } = await supabase.from('shared_movies').insert({
       sender_id: currentUser.id,
       receiver_id: shareTarget.id,
@@ -137,7 +152,11 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
       movie_poster_path: movie.poster_path || null,
       media_type: movie.media_type || 'movie'
     })
-    if (error) { setShareMsg('Failed to share'); return }
+    if (error) {
+      console.error('Share movie error:', error)
+      setShareMsg('Failed to share')
+      return
+    }
     setShareMsg(`Shared "${movie.title || movie.name}"!`)
     setMovieQuery(''); setMovieResults([])
     setTimeout(() => { setShareTarget(null); setShareMsg('') }, 2000)
@@ -153,7 +172,8 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
   if (!isOpen) return null
 
   return (
-    <div className="fp-overlay" ref={panelRef} role="dialog" aria-label="Friends">
+    <div className="fp-backdrop" onClick={onClose}>
+    <div className="fp-panel" ref={panelRef} role="dialog" aria-label="Friends" onClick={e => e.stopPropagation()}>
       <div className="fp-header">
         <span className="fp-title">Friends</span>
         <button onClick={onClose} className="fp-close" aria-label="Close">×</button>
@@ -163,7 +183,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
         <div className="fp-tag-row">
           <span className="fp-tag-label">Your tag</span>
           <span className="fp-tag-value">{profile.friend_tag}</span>
-          <button onClick={copyTag} className="fp-tag-copy" title="Copy">
+          <button onClick={copyTag} className="fp-tag-copy" title="Copy tag to clipboard">
             {copied ? '✓' : '⧉'}
           </button>
         </div>
@@ -184,7 +204,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
         </button>
       </div>
 
-      {searchMsg && <p className={`fp-msg ${searchMsg.includes('!') ? 'fp-msg-ok' : 'fp-msg-err'}`}>{searchMsg}</p>}
+      {searchMsg && <p className={`fp-msg ${searchMsg.includes('!') || searchMsg.includes('sent') ? 'fp-msg-ok' : 'fp-msg-err'}`}>{searchMsg}</p>}
 
       {searchResult && (
         <div className="fp-result-row">
@@ -195,7 +215,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
 
       {incoming.length > 0 && (
         <div className="fp-section">
-          <div className="fp-section-label">Pending requests</div>
+          <div className="fp-section-label">Pending requests ({incoming.length})</div>
           {incoming.map(req => (
             <div key={req.id} className="fp-request-row">
               <span className="fp-request-tag">{req.sender?.friend_tag}</span>
@@ -227,7 +247,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
       <div className="fp-section">
         <div className="fp-section-label">Friends {friends.length > 0 && `· ${friends.length}`}</div>
         {friends.length === 0 ? (
-          <p className="fp-empty">No friends yet</p>
+          <p className="fp-empty">No friends yet — share your tag or search above</p>
         ) : (
           friends.map(friend => (
             <div key={friend.id} className="fp-friend-row">
@@ -271,6 +291,7 @@ export function FriendsPanel({ isOpen, onClose, currentUser }) {
           </div>
         )}
       </div>
+    </div>
     </div>
   )
 }

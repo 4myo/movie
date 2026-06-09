@@ -1,10 +1,9 @@
 import React, { useEffect } from 'react'
 import {
+  BookmarkIcon,
   FilmIcon,
-  HeartFilledIcon,
-  HeartIcon,
-  MonitorPlayIcon,
-  PlayIcon
+  PlayIcon,
+  UsersIcon
 } from './Icons.jsx'
 import {
   getMediaLabel,
@@ -31,7 +30,10 @@ const MovieModal = ({
   onWatchTrailer,
   onPlayTitle,
   onToggleFavorite,
-  favoriteMovieIds = []
+  favoriteMovieIds = [],
+  onToggleWatchlist,
+  isInWatchlist = false,
+  onShare
 }) => {
   const mediaLabel = getMediaLabel(movie?.media_type)
   const mediaPluralLabel = getMediaPluralLabel(movie?.media_type)
@@ -40,10 +42,8 @@ const MovieModal = ({
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow
     const previousBodyScrollbarGutter = document.body.style.scrollbarGutter
-
     document.body.style.overflow = 'hidden'
     document.body.style.scrollbarGutter = 'stable'
-
     return () => {
       document.body.style.overflow = previousBodyOverflow
       document.body.style.scrollbarGutter = previousBodyScrollbarGutter
@@ -51,45 +51,30 @@ const MovieModal = ({
   }, [])
 
   useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose()
-    }
-
+    const handleKeyDown = (event) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
   if (!movie) return null
 
-  const releaseYear = movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A'
-  const heroImage = imageUrl(movie.backdrop_path || movie.poster_path, movie.backdrop_path ? 'w1280' : 'w780')
+  const releaseYear = movie.release_date ? new Date(movie.release_date).getFullYear() : null
+  const backdropImage = imageUrl(movie.backdrop_path, 'w1280')
   const canPlay = Boolean(movie?.id)
   const isTvShow = movie.media_type === 'tv'
-  const handlePlayTitle = () => {
-    if (canPlay) {
-      onPlayTitle?.(movie)
-    }
-  }
-  const handleOpenTrailer = () => {
-    if (trailerUrl) {
-      window.open(trailerUrl, '_blank', 'noopener,noreferrer')
-    }
-  }
+
+  const handlePlayTitle = () => { if (canPlay) onPlayTitle?.(movie) }
+  const handleOpenTrailer = () => { if (trailerUrl) window.open(trailerUrl, '_blank', 'noopener,noreferrer') }
 
   return (
-    <div className="movie-modal-backdrop cinematic-modal-backdrop" onClick={onClose}>
-      <article className="cinematic-title-sheet" onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="cinematic-close-button" onClick={onClose} aria-label="Close">
-          ×
-        </button>
+    <div className="cm-backdrop" onClick={onClose}>
+      <article className="cm-sheet" onClick={(e) => e.stopPropagation()}>
 
-        <div className="cinematic-title-hero">
+        {/* ── Hero image ── */}
+        <div className="cm-hero">
           <img
-            className="cinematic-title-hero-image"
-            src={heroImage}
+            className="cm-hero-image"
+            src={backdropImage}
             alt=""
             width="1280"
             height="720"
@@ -97,89 +82,100 @@ const MovieModal = ({
             decoding="async"
             fetchPriority="high"
           />
-          <div className="cinematic-title-hero-fade" />
-          <h2 className="cinematic-title-logo">{movie.title}</h2>
+          <div className="cm-hero-fade" />
+          <button type="button" className="cm-close" onClick={onClose} aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="18" height="18" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
         </div>
 
-        <div className="cinematic-title-body">
-          <div className="cinematic-title-facts">
-            <span>{releaseYear}</span>
-            <span>HD</span>
-            <span>{isTvShow ? `S${selectedSeasonNumber || 1}:E${selectedEpisodeNumber || 1}` : mediaLabel}</span>
-            {movie.vote_average ? <span>{movie.vote_average.toFixed(1)} rating</span> : null}
+        {/* ── Body ── */}
+        <div
+          className="cm-body"
+          style={{ '--backdrop-url': `url(${backdropImage})` }}
+        >
+          <h2 className="cm-title">{movie.title}</h2>
+
+          <div className="cm-meta">
+            {releaseYear && <span className="cm-badge">{releaseYear}</span>}
+            <span className="cm-badge">HD</span>
+            {isTvShow && <span className="cm-badge">S{selectedSeasonNumber || 1}:E{selectedEpisodeNumber || 1}</span>}
+            {movie.vote_average ? <span className="cm-badge">★ {movie.vote_average.toFixed(1)}</span> : null}
           </div>
 
-          <div className="cinematic-title-actions">
-            <button type="button" className="cinematic-play-button" onClick={handlePlayTitle} disabled={!canPlay}>
-              <PlayIcon className="cinematic-play-icon" />
-              <span>Play</span>
+          <div className="cm-actions">
+            <button type="button" className="cm-play-btn" onClick={handlePlayTitle} disabled={!canPlay}>
+              <PlayIcon className="cm-play-icon" />
+              Play
             </button>
 
             <button
               type="button"
-              className="cinematic-action-button"
+              className={`cm-icon-btn${isFavorite ? ' is-active' : ''}`}
               onClick={() => onToggleFavorite?.(movie)}
               aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-              title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+              title={isFavorite ? 'Saved to favorites' : 'Add to favorites'}
             >
-              <span className="cinematic-round-button" aria-hidden="true">
-                {isFavorite ? (
-                  <HeartFilledIcon className="cinematic-action-icon" />
-                ) : (
-                  <HeartIcon className="cinematic-action-icon" />
-                )}
-              </span>
-              <span className="cinematic-action-label">{isFavorite ? 'Saved' : 'Favorite'}</span>
+              <svg viewBox="0 0 24 24" fill={isFavorite ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20" aria-hidden="true"><path d="M20.8 6.1a5.1 5.1 0 0 0-7.2 0L12 7.7l-1.6-1.6a5.1 5.1 0 0 0-7.2 7.2L12 22l8.8-8.7a5.1 5.1 0 0 0 0-7.2z"/></svg>
             </button>
+
+            {onToggleWatchlist && (
+              <button
+                type="button"
+                className={`cm-icon-btn${isInWatchlist ? ' is-active' : ''}`}
+                onClick={() => onToggleWatchlist?.(movie)}
+                aria-label={isInWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
+                title={isInWatchlist ? 'In watchlist' : 'Add to watchlist'}
+              >
+                <BookmarkIcon className="cm-icon-btn-svg" />
+              </button>
+            )}
 
             <button
               type="button"
-              className="cinematic-action-button"
+              className="cm-icon-btn"
               onClick={handleOpenTrailer}
               disabled={!trailerUrl}
               aria-label="Open trailer"
               title="Open trailer"
             >
-              <span className="cinematic-round-button" aria-hidden="true">
-                <FilmIcon className="cinematic-action-icon" />
-              </span>
-              <span className="cinematic-action-label">Trailer</span>
+              <FilmIcon className="cm-icon-btn-svg" />
             </button>
 
-            <button
-              type="button"
-              className="cinematic-action-button"
-              onClick={handlePlayTitle}
-              disabled={!canPlay}
-              aria-label="Open player"
-              title="Open player"
-            >
-              <span className="cinematic-round-button is-glow" aria-hidden="true">
-                <MonitorPlayIcon className="cinematic-action-icon" />
-              </span>
-              <span className="cinematic-action-label">Player</span>
-            </button>
+            {onShare && (
+              <button
+                type="button"
+                className="cm-icon-btn"
+                onClick={() => onShare(movie)}
+                aria-label="Share with friend"
+                title="Share with friend"
+              >
+                <UsersIcon className="cm-icon-btn-svg" />
+              </button>
+            )}
           </div>
 
+          {movie.overview && (
+            <p className="cm-overview">{movie.overview}</p>
+          )}
+
           {isTvShow && seasonOptions.length > 0 && (
-            <div className="cinematic-episode-controls">
+            <div className="cm-episode-row">
               <label>
                 <span>Season</span>
-                <select value={selectedSeasonNumber ?? ''} onChange={(event) => onSeasonChange?.(Number(event.target.value))}>
-                  {seasonOptions.map((season) => (
-                    <option key={season.season_number} value={season.season_number}>
-                      {season.name || `Season ${season.season_number}`}
+                <select value={selectedSeasonNumber ?? ''} onChange={(e) => onSeasonChange?.(Number(e.target.value))}>
+                  {seasonOptions.map((s) => (
+                    <option key={s.season_number} value={s.season_number}>
+                      {s.name || `Season ${s.season_number}`}
                     </option>
                   ))}
                 </select>
               </label>
-
               <label>
                 <span>Episode</span>
-                <select value={selectedEpisodeNumber ?? ''} onChange={(event) => onEpisodeChange?.(Number(event.target.value))}>
-                  {episodeOptions.map((episode) => (
-                    <option key={episode.episode_number} value={episode.episode_number}>
-                      Episode {episode.episode_number}
+                <select value={selectedEpisodeNumber ?? ''} onChange={(e) => onEpisodeChange?.(Number(e.target.value))}>
+                  {episodeOptions.map((ep) => (
+                    <option key={ep.episode_number} value={ep.episode_number}>
+                      Episode {ep.episode_number}
                     </option>
                   ))}
                 </select>
@@ -187,41 +183,38 @@ const MovieModal = ({
             </div>
           )}
 
-          {movie.overview && <p className="cinematic-title-overview">{movie.overview}</p>}
-
-          <section className="cinematic-similar-section" aria-labelledby="cinematic-similar-title">
-            <div className="cinematic-similar-header">
-              <h3 id="cinematic-similar-title">More like this</h3>
-              <span>{mediaPluralLabel}</span>
-            </div>
-
-            {isSimilarLoading ? (
-              <p className="cinematic-similar-empty">Loading suggestions...</p>
-            ) : similarMovies.length > 0 ? (
-              <div className="cinematic-similar-row">
-                {similarMovies.slice(0, 8).map((similarMovie) => (
-                  <button
-                    key={`similar-${similarMovie.media_type || 'movie'}-${similarMovie.id}`}
-                    type="button"
-                    className="cinematic-similar-card"
-                    onClick={() => onWatchTrailer?.(similarMovie)}
-                  >
-                    <img
-                      src={imageUrl(similarMovie.backdrop_path || similarMovie.poster_path, similarMovie.backdrop_path ? 'w500' : 'w342')}
-                      alt=""
-                      width="500"
-                      height="281"
-                      loading="lazy"
-                      decoding="async"
-                    />
-                    <span>{similarMovie.title}</span>
-                  </button>
-                ))}
+          {(isSimilarLoading || similarMovies.length > 0) && (
+            <section className="cm-similar" aria-labelledby="cm-similar-heading">
+              <div className="cm-similar-header">
+                <h3 id="cm-similar-heading">More like this</h3>
+                <span>{mediaPluralLabel}</span>
               </div>
-            ) : (
-              <p className="cinematic-similar-empty">No similar titles are available right now.</p>
-            )}
-          </section>
+              {isSimilarLoading ? (
+                <p className="cm-similar-empty">Loading…</p>
+              ) : (
+                <div className="cm-similar-row">
+                  {similarMovies.slice(0, 8).map((m) => (
+                    <button
+                      key={`similar-${m.media_type || 'movie'}-${m.id}`}
+                      type="button"
+                      className="cm-similar-card"
+                      onClick={() => onWatchTrailer?.(m)}
+                    >
+                      <img
+                        src={imageUrl(m.backdrop_path || m.poster_path, m.backdrop_path ? 'w500' : 'w342')}
+                        alt=""
+                        width="500"
+                        height="281"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span>{m.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </article>
     </div>

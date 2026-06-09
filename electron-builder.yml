@@ -13,19 +13,25 @@ asar: true
 
 win:
   target:
-    - target: nsis-web
+    - target: nsis
       arch:
         - x64
   publisherName: Movieslo
   icon: build/icon.ico
 
-nsisWeb:
-  oneClick: true
+nsis:
+  oneClick: false
   perMachine: false
-  allowElevation: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Movieslo
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  runAfterFinish: true
+  differentialPackage: true
+  installerHeader: build/icon.ico
 
 publish:
   provider: github

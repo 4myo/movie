@@ -3,6 +3,9 @@ const { app, BrowserWindow, shell, ipcMain, protocol, net, Menu, session } = req
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 
+// Must be before app.whenReady() — lets iframes (YouTube) autoplay with audio
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 const isDev = !app.isPackaged;
 
 // Must be called before app is ready — registers app:// as a trusted secure origin
@@ -57,7 +60,8 @@ function createMain() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      autoplayPolicy: 'no-user-gesture-required'
     }
   });
 

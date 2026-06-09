@@ -367,9 +367,10 @@ const getHeroTrailerEmbedUrl = (videoKey) => {
   if (!videoKey) return ''
   const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop
   if (isDesktop) {
-    // enablejsapi=1 requires a valid http/https origin for its postMessage channel —
-    // app:// origin causes Error 153. Use a simple muted autoplay embed instead.
-    return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0&rel=0&modestbranding=1&playsinline=1&disablekb=1&fs=0&iv_load_policy=3`
+    // enablejsapi=1 without origin= param: avoids Error 153 (bad app:// origin) while
+    // still giving us postMessage control. The autoplay-policy switch in main.cjs
+    // lets Chromium play unmuted. Controls are shown so users can interact directly.
+    return `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=0&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&iv_load_policy=3`
   }
   const originParam = typeof window !== 'undefined'
     ? `&origin=${encodeURIComponent(window.location.origin)}`
@@ -855,7 +856,7 @@ const getSectionMediaTypes = (mediaFilter) => {
   return ['tv']
 }
 
-const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onPlayTitle, onClose }) => {
+const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpenTitle, onPlayTitle, onClose, onToggleWatchlist, watchlistMovieIds = [], onShare }) => {
   const routeLocation = useLocation()
   const previewMovie = routeLocation.state?.previewMovie
   const initialMovie = useMemo(() =>
@@ -1078,6 +1079,9 @@ const DetailsRoute = ({ mediaType, id, favoriteMovieIds, onToggleFavorite, onOpe
       onPlayTitle={onPlayTitle}
       onToggleFavorite={onToggleFavorite}
       favoriteMovieIds={favoriteMovieIds}
+      onToggleWatchlist={onToggleWatchlist}
+      isInWatchlist={watchlistMovieIds.includes(getMediaItemKey(movie))}
+      onShare={onShare}
     />
   )
 }
@@ -1113,8 +1117,11 @@ const BeltCard = React.memo(function BeltCard({
   onOpenTitle,
   onDismiss,
   onToggleWatchlist,
-  isInWatchlist = false
+  isInWatchlist = false,
+  onShare
 }) {
+  const [menuOpen, setMenuOpen] = React.useState(false)
+  const menuRef = React.useRef(null)
   const imagePriority = index === 0
   const handleOpenTitle = useCallback(() => {
     onOpenTitle(movie)
@@ -1129,10 +1136,30 @@ const BeltCard = React.memo(function BeltCard({
     event.stopPropagation()
     onDismiss?.(movie)
   }, [movie, onDismiss])
-  const handleToggleWatchlist = useCallback((event) => {
+  const handleActionButton = useCallback((event) => {
+    event.stopPropagation()
+    setMenuOpen((open) => !open)
+  }, [])
+  const handleWatchlist = useCallback((event) => {
     event.stopPropagation()
     onToggleWatchlist?.(movie)
+    setMenuOpen(false)
   }, [movie, onToggleWatchlist])
+  const handleShare = useCallback((event) => {
+    event.stopPropagation()
+    onShare?.(movie)
+    setMenuOpen(false)
+  }, [movie, onShare])
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return
+    const handler = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [menuOpen])
 
   return (
     <article
@@ -1154,16 +1181,32 @@ const BeltCard = React.memo(function BeltCard({
           ×
         </button>
       )}
-      {onToggleWatchlist && (
-        <button
-          type="button"
-          className={`belt-card-watchlist ${isInWatchlist ? 'is-active' : ''}`}
-          onClick={handleToggleWatchlist}
-          aria-label={`${isInWatchlist ? 'Remove' : 'Add'} ${movie.title} ${isInWatchlist ? 'from' : 'to'} watchlist`}
-          aria-pressed={isInWatchlist}
-        >
-          {isInWatchlist ? '✓' : '+'}
-        </button>
+      {(onToggleWatchlist || onShare) && (
+        <div className="belt-card-action-root" ref={menuRef}>
+          <button
+            type="button"
+            className={`belt-card-watchlist${isInWatchlist ? ' is-active' : ''}`}
+            onClick={handleActionButton}
+            aria-label={`Options for ${movie.title}`}
+            aria-expanded={menuOpen}
+          >
+            {isInWatchlist ? '✓' : '+'}
+          </button>
+          {menuOpen && (
+            <div className="belt-card-menu" role="menu">
+              {onToggleWatchlist && (
+                <button type="button" role="menuitem" onClick={handleWatchlist}>
+                  {isInWatchlist ? '✓ In Watchlist' : '+ Watchlist'}
+                </button>
+              )}
+              {onShare && (
+                <button type="button" role="menuitem" onClick={handleShare}>
+                  ↗ Share
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
       <div className="belt-card-image-shell">
         <img
@@ -1193,6 +1236,7 @@ const ContentBelt = React.memo(function ContentBelt({
   onOpenTitle,
   onDismissTitle,
   onToggleWatchlist,
+  onShare,
   watchlistMovieIds = [],
   beltVisibleCounts,
   setBeltVisibleCounts,
@@ -1294,6 +1338,7 @@ const ContentBelt = React.memo(function ContentBelt({
               onOpenTitle={onOpenTitle}
               onDismiss={onDismissTitle}
               onToggleWatchlist={onToggleWatchlist}
+              onShare={onShare}
               isInWatchlist={watchlistIdSet.has(getMediaItemKey(movie))}
             />
           ))}
@@ -1457,6 +1502,101 @@ const TasteQuizModal = ({
   )
 }
 
+const ShareToFriendsModal = ({ movie, currentUser, onClose }) => {
+  const [friends, setFriends] = React.useState([])
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [selectedFriend, setSelectedFriend] = React.useState(null)
+  const [status, setStatus] = React.useState('')
+
+  useEffect(() => {
+    if (!currentUser) return
+    const load = async () => {
+      setIsLoading(true)
+      const { data: reqs } = await supabase
+        .from('friend_requests')
+        .select('sender_id, receiver_id, sender:profiles!sender_id(id,friend_tag), receiver:profiles!receiver_id(id,friend_tag)')
+        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
+        .eq('status', 'accepted')
+      setFriends((reqs || []).map(r => r.sender_id === currentUser.id ? r.receiver : r.sender).filter(Boolean))
+      setIsLoading(false)
+    }
+    load()
+  }, [currentUser])
+
+  const handleShare = async () => {
+    if (!selectedFriend || !movie) return
+    setStatus('Sharing...')
+    const { error } = await supabase.from('shared_movies').insert({
+      sender_id: currentUser.id,
+      receiver_id: selectedFriend.id,
+      movie_id: movie.id,
+      movie_title: movie.title || movie.name,
+      movie_poster_path: movie.poster_path || movie.backdrop_path || null,
+      media_type: movie.media_type || 'movie'
+    })
+    if (error) { setStatus('Failed to share. Try again.'); return }
+    setStatus(`Shared with ${selectedFriend.friend_tag}!`)
+    setTimeout(onClose, 1400)
+  }
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <div className="share-modal-backdrop" onClick={onClose}>
+      <div className="share-modal" onClick={e => e.stopPropagation()} role="dialog" aria-label="Share with friend">
+        <div className="share-modal-header">
+          <span>Share with a friend</span>
+          <button type="button" onClick={onClose} className="share-modal-close">×</button>
+        </div>
+        {movie && (
+          <div className="share-modal-movie">
+            {(movie.poster_path || movie.backdrop_path) && (
+              <img
+                src={`https://image.tmdb.org/t/p/w92${movie.poster_path || movie.backdrop_path}`}
+                alt=""
+                className="share-modal-movie-img"
+              />
+            )}
+            <span className="share-modal-movie-title">{movie.title || movie.name}</span>
+          </div>
+        )}
+        <div className="share-modal-body">
+          {isLoading ? (
+            <p className="share-modal-empty">Loading friends…</p>
+          ) : friends.length === 0 ? (
+            <p className="share-modal-empty">No friends yet. Add friends in the Friends panel.</p>
+          ) : (
+            <div className="share-modal-friends">
+              {friends.map(friend => (
+                <button
+                  key={friend.id}
+                  type="button"
+                  className={`share-modal-friend${selectedFriend?.id === friend.id ? ' is-selected' : ''}`}
+                  onClick={() => setSelectedFriend(friend)}
+                >
+                  <span className="share-modal-friend-avatar">{(friend.friend_tag || '?')[0].toUpperCase()}</span>
+                  <span>{friend.friend_tag}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {status && <p className={`share-modal-status${status.includes('Failed') ? ' is-error' : ''}`}>{status}</p>}
+        <div className="share-modal-actions">
+          <button type="button" className="share-modal-send" onClick={handleShare} disabled={!selectedFriend || Boolean(status)}>
+            Share
+          </button>
+          <button type="button" className="share-modal-cancel" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const ProfilePanel = ({
   isOpen,
   user,
@@ -1544,6 +1684,12 @@ const ProfilePanel = ({
                 <div>
                   <span>Created</span>
                   <strong>{joinedAt}</strong>
+                </div>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <span>App version</span>
+                  <strong>v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '—'}</strong>
                 </div>
               </div>
             </div>
@@ -2086,6 +2232,8 @@ const BrowsePage = () => {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem(COOKIE_NOTICE_STORAGE_KEY) === 'accepted'
   })
+  const [updateState, setUpdateState] = useState(null)
+  const [shareModalMovie, setShareModalMovie] = useState(null)
   const [_isListTransitionPending, startListTransition] = useTransition()
   const moviesSectionRef = useRef(null)
   const browseRowsRef = useRef(null)
@@ -2218,6 +2366,12 @@ const BrowsePage = () => {
     if (tasteProfileSyncTimeoutRef.current) {
       window.clearTimeout(tasteProfileSyncTimeoutRef.current)
     }
+  }, [])
+
+  useEffect(() => {
+    if (!window.electron?.isDesktop) return
+    window.electron.onUpdateAvailable(() => setUpdateState('available'))
+    window.electron.onUpdateDownloaded(() => setUpdateState('ready'))
   }, [])
 
   const recommendationItems = useMemo(() => buildRecommendations({
@@ -4409,13 +4563,13 @@ const BrowsePage = () => {
             {heroTrailerUrl && !isHeroCollapsed && (
               <iframe
                 ref={heroVideoRef}
-                className="stream-hero-video"
+                className={`stream-hero-video${window.electron?.isDesktop ? ' stream-hero-video-desktop' : ''}`}
                 src={heroTrailerUrl}
                 title={`${heroTitle?.title || 'Featured'} trailer`}
                 loading="eager"
                 fetchPriority="high"
                 referrerPolicy="strict-origin-when-cross-origin"
-                allow="autoplay *; encrypted-media *; picture-in-picture *"
+                allow="autoplay *; encrypted-media *; picture-in-picture *; fullscreen *"
                 onLoad={syncHeroAudio}
                 allowFullScreen
               />
@@ -4491,7 +4645,11 @@ const BrowsePage = () => {
                   aria-label={isHeroMuted || heroVolume <= 0 ? 'Unmute featured trailer' : 'Mute featured trailer'}
                   aria-pressed={isHeroMuted || heroVolume <= 0}
                 >
-                  {isHeroMuted || heroVolume <= 0 ? 'Mute' : 'Audio'}
+                  {isHeroMuted || heroVolume <= 0 ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                  )}
                 </button>
                 <input
                   type="range"
@@ -4537,6 +4695,7 @@ const BrowsePage = () => {
                 beltKey="watchlist"
                 onOpenTitle={openTitleDetails}
                 onToggleWatchlist={toggleWatchlistMovie}
+              onShare={authUser ? setShareModalMovie : undefined}
                 watchlistMovieIds={watchlistMovieIds}
                 beltVisibleCounts={beltVisibleCounts}
                 setBeltVisibleCounts={setBeltVisibleCounts}
@@ -4572,6 +4731,7 @@ const BrowsePage = () => {
               beltKey={`person-${selectedPersonResult.id}`}
               onOpenTitle={openTitleDetails}
               onToggleWatchlist={toggleWatchlistMovie}
+              onShare={authUser ? setShareModalMovie : undefined}
               watchlistMovieIds={watchlistMovieIds}
               beltVisibleCounts={beltVisibleCounts}
               setBeltVisibleCounts={setBeltVisibleCounts}
@@ -4607,6 +4767,7 @@ const BrowsePage = () => {
                 onOpenTitle={openTitleDetails}
                 onDismissTitle={isAuthenticated ? hideRecommendationTitle : undefined}
                 onToggleWatchlist={toggleWatchlistMovie}
+              onShare={authUser ? setShareModalMovie : undefined}
                 watchlistMovieIds={watchlistMovieIds}
                 onLoadMore={loadMoreRecommendedTitles}
                 beltVisibleCounts={beltVisibleCounts}
@@ -4629,6 +4790,7 @@ const BrowsePage = () => {
                   beltKey={row.id}
                   onOpenTitle={openTitleDetails}
                   onToggleWatchlist={toggleWatchlistMovie}
+              onShare={authUser ? setShareModalMovie : undefined}
                   watchlistMovieIds={watchlistMovieIds}
                   beltVisibleCounts={beltVisibleCounts}
                   setBeltVisibleCounts={setBeltVisibleCounts}
@@ -4655,6 +4817,7 @@ const BrowsePage = () => {
                   beltKey={`genre-${row.id}`}
                   onOpenTitle={openTitleDetails}
                   onToggleWatchlist={toggleWatchlistMovie}
+              onShare={authUser ? setShareModalMovie : undefined}
                   watchlistMovieIds={watchlistMovieIds}
                   beltVisibleCounts={beltVisibleCounts}
                   setBeltVisibleCounts={setBeltVisibleCounts}
@@ -4686,6 +4849,21 @@ const BrowsePage = () => {
             <button type="button" onClick={acceptCookieNotice}>Accept</button>
           </div>
         )}
+
+        {updateState === 'available' && (
+          <div className="cookie-notice" role="status" aria-label="Update notification">
+            <p>A new version is downloading in the background&hellip;</p>
+            <button type="button" onClick={() => setUpdateState(null)}>Dismiss</button>
+          </div>
+        )}
+
+        {updateState === 'ready' && (
+          <div className="cookie-notice" role="status" aria-label="Update ready">
+            <p>Update ready. Restart Movieslo to apply it.</p>
+            <button type="button" onClick={() => window.electron.installUpdate()}>Restart &amp; Install</button>
+            <button type="button" onClick={() => setUpdateState(null)}>Later</button>
+          </div>
+        )}
       </div>
 
       {activeDetailMediaType && activeDetailId && (
@@ -4697,6 +4875,9 @@ const BrowsePage = () => {
           onOpenTitle={openTitleDetails}
           onPlayTitle={playTitle}
           onClose={closeTitleDetails}
+          onToggleWatchlist={toggleWatchlistMovie}
+          watchlistMovieIds={watchlistMovieIds}
+          onShare={authUser ? setShareModalMovie : undefined}
         />
       )}
 
@@ -4707,6 +4888,14 @@ const BrowsePage = () => {
           onSave={(profile) => saveTasteProfile(profile, { closeQuiz: true })}
           onDismiss={dismissTasteQuiz}
           isSaving={isSavingTasteProfile}
+        />
+      )}
+
+      {shareModalMovie && (
+        <ShareToFriendsModal
+          movie={shareModalMovie}
+          currentUser={authUser}
+          onClose={() => setShareModalMovie(null)}
         />
       )}
 
