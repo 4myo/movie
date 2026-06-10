@@ -4622,7 +4622,7 @@ const BrowsePage = () => {
       <div className={`streaming-home ${isHeroCollapsed ? 'is-browse-focused' : ''}`}>
         {!window.electron?.isDesktop && (
           <a
-            href="https://github.com/4myo/movie/releases/download/v1.3.3/Movieslo-Web-Setup-1.3.3.exe"
+            href="https://github.com/4myo/movie/releases/download/v1.3.5/Movieslo-Web-Setup-1.3.5.exe"
             className="download-app-badge"
             title="Download Movieslo for Windows"
           >
