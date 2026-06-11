@@ -1123,6 +1123,7 @@ const BeltCard = React.memo(function BeltCard({
   onShare
 }) {
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const [imgLoaded, setImgLoaded] = React.useState(false)
   const menuRef = React.useRef(null)
   const imagePriority = index === 0
   const handleOpenTitle = useCallback(() => {
@@ -1212,7 +1213,7 @@ const BeltCard = React.memo(function BeltCard({
       )}
       <div className="belt-card-image-shell">
         <img
-          className="belt-card-image"
+          className={`belt-card-image${imgLoaded ? ' is-loaded' : ''}`}
           src={movie.backdrop_path ? getBackdropUrl(movie, 'w500') : getPosterUrl(movie, 'w342')}
           alt={movie.title}
           width="500"
@@ -1221,6 +1222,7 @@ const BeltCard = React.memo(function BeltCard({
           decoding="async"
           fetchPriority={imagePriority ? 'high' : 'auto'}
           sizes="(min-width: 640px) 24rem, 17rem"
+          onLoad={() => setImgLoaded(true)}
         />
       </div>
       <h3 className="belt-card-title">{movie.title}</h3>
@@ -2405,6 +2407,7 @@ const BrowsePage = () => {
   const [heroIndex, setHeroIndex] = useState(0)
   const [heroQueueMode, setHeroQueueMode] = useState('trending')
   const [isHeroCollapsed, setIsHeroCollapsed] = useState(false)
+  const [heroTogglePressing, setHeroTogglePressing] = useState(false)
   const [heroVolume, setHeroVolume] = useState(0.25)
   const [isHeroMuted, setIsHeroMuted] = useState(false)
   const [favoriteMovies, setFavoriteMovies] = useState([])
@@ -4519,6 +4522,8 @@ const BrowsePage = () => {
     })
   }
   const toggleHeroFocus = useCallback(() => {
+    setHeroTogglePressing(true)
+    setTimeout(() => setHeroTogglePressing(false), 420)
     setIsHeroCollapsed((isCollapsed) => !isCollapsed)
   }, [])
   const filteredTrendingMovies = useMemo(() =>
@@ -4975,7 +4980,7 @@ const BrowsePage = () => {
 
         <button
           type="button"
-          className={`stream-hero-toggle ${isHeroCollapsed ? 'is-expanded' : 'is-collapsed'}`}
+          className={`stream-hero-toggle ${isHeroCollapsed ? 'is-expanded' : 'is-collapsed'}${heroTogglePressing ? ' is-pressing' : ''}`}
           onClick={toggleHeroFocus}
           aria-label={isHeroCollapsed ? 'Show featured trailer' : 'Show browse rows'}
           aria-pressed={isHeroCollapsed}
